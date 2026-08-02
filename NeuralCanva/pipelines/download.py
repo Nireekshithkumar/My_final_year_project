@@ -4,22 +4,26 @@ from django.http import FileResponse, Http404
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from accounts.authentication import CsrfExemptSessionAuthentication
+from .models import Graph
 
 
 class DownloadModelBundleView(APIView):
     authentication_classes = [CsrfExemptSessionAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def get(self, request, graph_id):
-        artifact_dir = f'media/artifacts/{graph_id}'
+    def get(self, request, pk):
+        try:
+            graph = Graph.objects.get(pipeline_id=pk, pipeline__owner=request.user)
+        except Graph.DoesNotExist:
+            raise Http404("No graph found for this pipeline.")
+
+        artifact_dir = f'media/artifacts/{graph.id}'
         if not os.path.isdir(artifact_dir):
-            raise Http404("No artifacts found for this run.")
+            raise Http404("No artifacts found — run the pipeline first.")
 
         files = os.listdir(artifact_dir)
-
         instructions = self._build_instructions(files)
-        instructions_path = f'{artifact_dir}/HOW_TO_USE.txt'
-        with open(instructions_path, 'w') as f:
+        with open(f'{artifact_dir}/HOW_TO_USE.txt', 'w') as f:
             f.write(instructions)
 
         zip_path = f'{artifact_dir}/bundle.zip'
@@ -28,11 +32,11 @@ class DownloadModelBundleView(APIView):
                 if fname != 'bundle.zip':
                     zf.write(os.path.join(artifact_dir, fname), fname)
 
-        return FileResponse(open(zip_path, 'rb'), as_attachment=True, filename=f'model_bundle_{graph_id}.zip')
+        return FileResponse(open(zip_path, 'rb'), as_attachment=True, filename=f'model_bundle_{pk}.zip')
 
     def _build_instructions(self, files):
         model_file = next((f for f in files if f.startswith('model.')), None)
-        scaler_files = [f for f in files if f not in (model_file,) and f.endswith('.json')]
+        scaler_files = [f for f in files if f != model_file and f.endswith('.json')]
 
         lines = ["NEURAL CANVAS — MODEL BUNDLE\n", "=" * 40, ""]
 
@@ -61,14 +65,10 @@ class DownloadModelBundleView(APIView):
                 "    import json, numpy as np",
                 f"    with open('{sf}') as f:",
                 "        params = json.load(f)",
-                "    # For StandardScaler:",
-                "    X_scaled = (X_new - np.array(params['mean'])) / np.array(params['scale'])",
-                "    # Apply this to X_new BEFORE calling model.predict(), using the",
-                "    # exact same column order as during training.",
+                "    # For StandardScaler: X_scaled = (X_new - mean) / scale",
                 "",
             ]
 
-        lines.append("IMPORTANT: Always preprocess new input data through the scaler/encoder")
-        lines.append("in the same order it was applied during training, before calling model.predict().")
-
+        lines.append("IMPORTANT: Preprocess new input through the scaler/encoder in the")
+        lines.append("same order used during training, before calling model.predict().")
         return "\n".join(lines)

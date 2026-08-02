@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../api/axios'
-import ThemeToggle from '../components/ThemeToggle'
+  
 
 export default function Dashboard() {
   const [pipelines, setPipelines] = useState([])
@@ -50,7 +50,7 @@ export default function Dashboard() {
     <div className="min-h-screen bg-gray-50 dark:bg-gray-900 p-8">
       <div className="flex justify-between items-center mb-8">
         <h1 className="text-3xl font-bold text-gray-800 dark:text-white">My Pipelines</h1>
-        <ThemeToggle />
+        
       </div>
 
       <div className="flex gap-3 mb-8">

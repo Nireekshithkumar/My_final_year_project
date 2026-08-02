@@ -1,0 +1,6 @@
+NEURAL CANVAS — MODEL BUNDLE
+
+========================================
+
+IMPORTANT: Preprocess new input through the scaler/encoder in the
+same order used during training, before calling model.predict().

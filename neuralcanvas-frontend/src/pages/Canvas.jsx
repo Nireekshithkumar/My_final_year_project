@@ -111,6 +111,7 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     if (!pipelineId) return
 
     try {
+      setError('')
       onStatusChange('running')
       await api.post(`/pipelines/${pipelineId}/execute/`)
     } catch (err) {
@@ -227,6 +228,7 @@ export default function Canvas() {
   const [workflowName, setWorkflowName] = useState('Untitled pipeline')
   const [workflowKey, setWorkflowKey] = useState('')
   const [status, setStatus] = useState('idle')
+  const [progress, setProgress] = useState(0)
   const flowRef = useRef(null)
   const theme = useStore((s) => s.theme)
   const isDark = theme === 'dark'
@@ -249,6 +251,32 @@ export default function Canvas() {
 
     loadPipeline()
   }, [navigate, pipelineId])
+
+  // Listen for run progress/completion over WebSocket while a run is in flight
+  useEffect(() => {
+    if (!pipelineId || status !== 'running') return
+
+    const ws = new WebSocket(`ws://localhost:8080/ws/runs/${pipelineId}/logs/`)
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data)
+      if (data.percent !== null && data.percent !== undefined) {
+        setProgress(data.percent)
+      }
+      if (data.stage === 'done' || data.stage === 'cached') {
+        setStatus('success')
+      } else if (data.stage === 'error') {
+        setStatus('failed')
+      }
+    }
+
+    ws.onerror = () => {
+      // connection-level failure (e.g. server not serving ASGI/WS) — surfaced via console only
+      console.error('WebSocket connection failed for run logs.')
+    }
+
+    return () => ws.close()
+  }, [pipelineId, status])
 
   const handleUpdate = async () => {
     if (!pipelineId) return
@@ -281,6 +309,9 @@ export default function Canvas() {
             <label style={styles.small}>Key</label>
             <input style={styles.input} value={workflowKey} onChange={(e) => setWorkflowKey(e.target.value)} />
           </div>
+          {status === 'running' && (
+            <div style={styles.small}>Running… {progress}%</div>
+          )}
           <button style={styles.btnGray} onClick={handleDownload}>⬇ Download Model</button>
           <button style={styles.btnGray} onClick={handleUpdate}>Update</button>
           <button style={styles.btnDark}>User Permissions</button>
