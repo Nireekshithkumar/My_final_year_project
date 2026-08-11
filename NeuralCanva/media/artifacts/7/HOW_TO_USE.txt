@@ -2,5 +2,17 @@ NEURAL CANVAS — MODEL BUNDLE
 
 ========================================
 
+MODEL (scikit-learn, pickle format):
+    import pickle
+    with open('model.pkl', 'rb') as f:
+        model = pickle.load(f)
+    predictions = model.predict(X_new)
+
+STANDARDSCALER (JSON params — reconstruct manually):
+    import json, numpy as np
+    with open('StandardScaler.json') as f:
+        params = json.load(f)
+    # For StandardScaler: X_scaled = (X_new - mean) / scale
+
 IMPORTANT: Preprocess new input through the scaler/encoder in the
 same order used during training, before calling model.predict().

@@ -21,6 +21,7 @@ const SECTIONS = [
   {
     title: "Preprocessing",
     items: [
+      { type: "Encoder", label: "Encoder", sub: "Categorical → numeric", icon: "🔠", color: "#0891b2" },
       { type: "StandardScaler", label: "Standard Scaler", sub: "Z-score normalize", icon: "📏", color: "#0891b2" },
       { type: "MinMaxScaler", label: "MinMax Scaler", sub: "Scale to [0,1]", icon: "📐", color: "#0891b2" },
       { type: "PCA", label: "PCA", sub: "Reduce dimensions", icon: "🔻", color: "#0891b2" },

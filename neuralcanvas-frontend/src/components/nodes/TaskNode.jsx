@@ -3,7 +3,7 @@ import { Handle, Position } from "reactflow";
 import { useReactFlow } from "reactflow";
 
 export default function TaskNode({ id, data }) {
-  const { icon, iconColor, title, subtitle, checked, outputs = [], nodeType } = data;
+  const { icon, iconColor, title, subtitle, checked, outputs = [], nodeType, lastPrediction } = data;
   const { setNodes, setEdges } = useReactFlow();
 
   const handleDelete = (e) => {
@@ -15,6 +15,11 @@ export default function TaskNode({ id, data }) {
   const handleDownload = (e) => {
     e.stopPropagation();
     data.onDownload?.(id, data.params);
+  };
+
+  const handlePredict = (e) => {
+    e.stopPropagation();
+    data.onPredict?.(id);
   };
 
   return (
@@ -38,6 +43,19 @@ export default function TaskNode({ id, data }) {
         <span style={styles.subtitle}>{subtitle}</span>
         {checked && <span style={styles.checkBadge}>✓</span>}
       </div>
+
+      {nodeType === "predict" && (
+        <>
+          <button onClick={handlePredict} style={styles.predictBtn}>
+            Predict
+          </button>
+          {lastPrediction !== undefined && lastPrediction !== null && (
+            <div style={styles.predictionResult}>
+              Result: <strong>{String(lastPrediction)}</strong>
+            </div>
+          )}
+        </>
+      )}
 
       {outputs.map((out) => (
         <div key={out.id} style={{ ...styles.outputRow, position: "relative" }}>
@@ -87,6 +105,15 @@ const styles = {
   outputPill: {
     display: "inline-block", color: "#fff", fontSize: 11,
     borderRadius: 12, padding: "3px 10px", width: "100%", textAlign: "center",
+  },
+  predictBtn: {
+    width: "100%", background: "#2563eb", color: "#fff", border: "none",
+    borderRadius: 6, padding: "6px 0", fontSize: 12, fontWeight: 600,
+    cursor: "pointer", marginBottom: 6,
+  },
+  predictionResult: {
+    fontSize: 12, color: "#16a34a", fontWeight: 600,
+    background: "#f0fdf4", borderRadius: 6, padding: "4px 8px", marginBottom: 6,
   },
   handleIn: { background: "#94a3b8", width: 8, height: 8 },
   handleOut: { background: "#3b82f6", width: 8, height: 8 },

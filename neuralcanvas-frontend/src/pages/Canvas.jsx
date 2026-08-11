@@ -49,6 +49,44 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     )
   }, [setNodes])
 
+  const getUpstreamColumns = useCallback((nodeId) => {
+    const parentEdge = edges.find((e) => e.target === nodeId)
+    if (!parentEdge) return []
+    const parentNode = nodes.find((n) => n.id === parentEdge.source)
+    if (!parentNode) return []
+
+    if (parentNode.data?.nodeType === 'splitDataset') {
+      const allCols = getUpstreamColumns(parentNode.id)
+      const target = parentNode.data.params?.target_column
+      return allCols.filter((c) => c !== target)
+    }
+
+    if (parentNode.data?.columns) return parentNode.data.columns
+    return getUpstreamColumns(parentNode.id)
+  }, [edges, nodes])
+  const getUpstreamColumnTypes = useCallback((nodeId) => {
+    const parentEdge = edges.find((e) => e.target === nodeId)
+    if (!parentEdge) return {}
+    const parentNode = nodes.find((n) => n.id === parentEdge.source)
+    if (!parentNode) return {}
+    if (parentNode.data?.columnTypes) return parentNode.data.columnTypes
+    return getUpstreamColumnTypes(parentNode.id)
+  }, [edges, nodes])
+
+  const handlePredict = useCallback(async (nodeId) => {
+    const node = nodes.find((n) => n.id === nodeId)
+    const featureValues = node?.data?.params?.feature_values || {}
+
+    try {
+      const { data } = await api.post(`/pipelines/${pipelineId}/predict/`, { feature_values: featureValues })
+      updateNodeData(nodeId, { lastPrediction: data.prediction })
+    } catch (err) {
+      updateNodeData(nodeId, {
+        lastPrediction: 'Error: ' + (err.response?.data?.error || 'prediction failed'),
+      })
+    }
+  }, [nodes, pipelineId, updateNodeData])
+
   const onConnect = useCallback(
     (params) =>
       setEdges((currentEdges) =>
@@ -85,12 +123,13 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
           subtitle: label,
           checked: true,
           outputs: type === 'end' ? [] : (OUTPUT_PRESETS[type] || OUTPUT_PRESETS.default),
+          onPredict: handlePredict,
         },
       }
       setNodes((currentNodes) => currentNodes.concat(newNode))
       onStatusChange('idle')
     },
-    [onStatusChange, screenToFlowPosition, setNodes]
+    [onStatusChange, screenToFlowPosition, setNodes, handlePredict]
   )
 
   const saveGraph = useCallback(async () => {
@@ -135,7 +174,10 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
 
       try {
         const { data } = await api.get(`/pipelines/${pipelineId}/graph/`)
-        setNodes(data.nodes || [])
+        const loadedNodes = (data.nodes || []).map((n) =>
+          n.data?.nodeType === 'predict' ? { ...n, data: { ...n.data, onPredict: handlePredict } } : n
+        )
+        setNodes(loadedNodes)
         setEdges(data.edges || [])
       } catch {
         // ignore missing graph on first load
@@ -143,7 +185,7 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     }
 
     loadGraph()
-  }, [pipelineId, setEdges, setNodes])
+  }, [pipelineId])
 
   return (
     <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
@@ -190,6 +232,7 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
                 updateNodeData(selectedNode.id, {
                   datasetId: dataset.id,
                   columns: dataset.columns,
+                  columnTypes: dataset.column_types,
                   subtitle: dataset.name,
                 })
               }
@@ -202,6 +245,15 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
               params={selectedNode.data.params || {}}
               onChange={(newParams) => updateNodeData(selectedNode.id, { params: newParams, checked: true })}
               dark={isDark}
+              columns={
+                selectedNode.data.nodeType === 'Encoder'
+                  ? Object.entries(getUpstreamColumnTypes(selectedNode.id))
+                    .filter(([, t]) => t === 'categorical' || t === 'text')
+                    .map(([name]) => name)
+                  : ['splitDataset', 'StandardScaler', 'MinMaxScaler', 'predict'].includes(selectedNode.data.nodeType)
+                    ? getUpstreamColumns(selectedNode.id)
+                    : []
+              }
             />
           )}
         </div>
@@ -229,6 +281,7 @@ export default function Canvas() {
   const [workflowKey, setWorkflowKey] = useState('')
   const [status, setStatus] = useState('idle')
   const [progress, setProgress] = useState(0)
+  const [predictionResult, setPredictionResult] = useState(null)
   const flowRef = useRef(null)
   const theme = useStore((s) => s.theme)
   const isDark = theme === 'dark'
@@ -252,7 +305,6 @@ export default function Canvas() {
     loadPipeline()
   }, [navigate, pipelineId])
 
-  // Listen for run progress/completion over WebSocket while a run is in flight
   useEffect(() => {
     if (!pipelineId || status !== 'running') return
 
@@ -263,6 +315,9 @@ export default function Canvas() {
       if (data.percent !== null && data.percent !== undefined) {
         setProgress(data.percent)
       }
+      if (data.stage === 'predict') {
+        setPredictionResult(data.message)
+      }
       if (data.stage === 'done' || data.stage === 'cached') {
         setStatus('success')
       } else if (data.stage === 'error') {
@@ -271,7 +326,6 @@ export default function Canvas() {
     }
 
     ws.onerror = () => {
-      // connection-level failure (e.g. server not serving ASGI/WS) — surfaced via console only
       console.error('WebSocket connection failed for run logs.')
     }
 
@@ -311,6 +365,11 @@ export default function Canvas() {
           </div>
           {status === 'running' && (
             <div style={styles.small}>Running… {progress}%</div>
+          )}
+          {predictionResult && (
+            <div style={{ ...styles.small, color: isDark ? '#4ade80' : '#16a34a', fontWeight: 600 }}>
+              {predictionResult}
+            </div>
           )}
           <button style={styles.btnGray} onClick={handleDownload}>⬇ Download Model</button>
           <button style={styles.btnGray} onClick={handleUpdate}>Update</button>

@@ -5,7 +5,7 @@ from .models import Dataset
 class DatasetUploadSerializer(serializers.ModelSerializer):
     class Meta:
         model = Dataset
-        fields = ['id', 'name', 'file', 'columns', 'row_count', 'uploaded_at']
+        fields = ['id', 'name', 'file', 'columns', 'row_count', 'column_types', 'uploaded_at']
         read_only_fields = ['id', 'columns', 'row_count', 'uploaded_at']
 
     def create(self, validated_data):
@@ -13,13 +13,39 @@ class DatasetUploadSerializer(serializers.ModelSerializer):
             owner=self.context['request'].user,
             **validated_data
         )
-        # peek at the file to cache columns — avoids re-reading the full CSV on every canvas load
         try:
             df = pd.read_csv(instance.file.path, nrows=500)
             full_len = sum(1 for _ in open(instance.file.path)) - 1
             instance.columns = list(df.columns)
             instance.row_count = full_len
-            instance.save(update_fields=['columns', 'row_count'])
+            instance.column_types = self._detect_types(df)
+            instance.save(update_fields=['columns', 'row_count', 'column_types'])
         except Exception:
-            pass  # bad file — leave columns empty, frontend can show an error state
+            pass
         return instance
+    
+    def _detect_types(self, df):
+        types = {}
+        for col in df.columns:
+            series = df[col].dropna()
+            if series.empty:
+                types[col] = "text"
+                continue
+            if pd.api.types.is_bool_dtype(series):
+                types[col] = "boolean"
+            elif pd.api.types.is_numeric_dtype(series):
+                types[col] = "numerical"
+            else:
+                try:
+                    pd.to_datetime(series, errors='raise')
+                    types[col] = "datetime"
+                    continue
+                except (ValueError, TypeError):
+                    pass
+                unique_ratio = series.nunique() / len(series)
+                avg_len = series.astype(str).str.len().mean()
+                if unique_ratio < 0.5 and avg_len < 30:
+                    types[col] = "categorical"
+                else:
+                    types[col] = "text"
+        return types

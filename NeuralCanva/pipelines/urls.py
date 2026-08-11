@@ -1,6 +1,7 @@
 from django.urls import path
 from .views import PipelineListCreateView, PipelineDetailView, GraphUpdateView, GraphExecuteView
 from .download import DownloadModelBundleView
+from .predict_view import PredictView
 
 urlpatterns = [
     path('', PipelineListCreateView.as_view(), name='pipeline-list-create'),
@@ -8,4 +9,5 @@ urlpatterns = [
     path('<int:pk>/graph/', GraphUpdateView.as_view(), name='graph-update'),
     path('<int:pk>/execute/', GraphExecuteView.as_view(), name='graph-execute'),
     path('<int:pk>/download/', DownloadModelBundleView.as_view(), name='download-bundle'),
-]
+    path('<int:pk>/predict/', PredictView.as_view(), name='predict'),
+] 

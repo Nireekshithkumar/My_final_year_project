@@ -10,6 +10,7 @@ class Dataset(models.Model):
     columns = models.JSONField(default=list)      # cached column names
     row_count = models.IntegerField(default=0)
     uploaded_at = models.DateTimeField(auto_now_add=True)
+    column_types = models.JSONField(default=dict) 
 
     def __str__(self):
         return self.name

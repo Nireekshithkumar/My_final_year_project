@@ -99,6 +99,10 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
     stratify_flag = params.pop('stratify', False)
 
     clf_class = ALGORITHM_REGISTRY[algorithm_type]
+    
+    # custom column-selection params aren't real sklearn constructor args — extract them first
+    selected_columns = params.pop('columns', None)
+    
     model = clf_class(**params)
 
     # clustering / unsupervised
@@ -108,17 +112,33 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
 
     # preprocessing
     if algorithm_type in ["StandardScaler", "MinMaxScaler"]:
-        transformed = model.fit_transform(X)
-        result = {"transformed": transformed.tolist()}
+        all_columns = input_data.get('columns', [])
+        X_arr = np.array(X, dtype=float)
+    
+        if selected_columns and all_columns:
+            col_indices = [all_columns.index(c) for c in selected_columns if c in all_columns]
+        else:
+            col_indices = list(range(X_arr.shape[1]))
+    
+        model.fit(X_arr[:, col_indices])
+        X_arr[:, col_indices] = model.transform(X_arr[:, col_indices])
+    
+        result = {
+            "X": X_arr.tolist(),
+            "y": input_data.get('y'),
+            "columns": all_columns,
+        }
         if algorithm_type == "StandardScaler":
             result["scaler_params"] = {
                 "mean": model.mean_.tolist(),
-                "scale": model.scale_.tolist()
+                "scale": model.scale_.tolist(),
+                "columns": selected_columns or all_columns,
             }
         else:
             result["scaler_params"] = {
                 "data_min": model.data_min_.tolist(),
-                "data_max": model.data_max_.tolist()
+                "data_max": model.data_max_.tolist(),
+                "columns": selected_columns or all_columns,
             }
         return result
 
@@ -154,19 +174,20 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
         "DecisionTreeRegressor", "RandomForestRegressor",
         "GradientBoostingRegressor", "SVR", "KNeighborsRegressor"
     ]
-
     if is_regression:
-        return {
-            "predictions": predictions.tolist(),
-            "mse": mean_squared_error(y_test, predictions),
-            "r2": r2_score(y_test, predictions),
-        }
+            return {
+                "predictions": predictions.tolist(),
+                "mse": mean_squared_error(y_test, predictions),
+                "r2": r2_score(y_test, predictions),
+                "model_b64": model_b64,
+            }
     else:
-        return {
-            "predictions": predictions.tolist(),
-            "accuracy": accuracy_score(y_test, predictions),
-            "classification_report": classification_report(y_test, predictions, output_dict=True),
-            "confusion_matrix": confusion_matrix(y_test, predictions).tolist(),
+            return {
+                "predictions": predictions.tolist(),
+                "accuracy": accuracy_score(y_test, predictions),
+                "classification_report": classification_report(y_test, predictions, output_dict=True),
+                "confusion_matrix": confusion_matrix(y_test, predictions).tolist(),
+                "model_b64": model_b64,
         }
 
 # ─── DL ALGORITHMS ────────────────────────────────────────────────────────────
@@ -204,13 +225,13 @@ def execute_dl(algorithm_type: str, params: dict, input_data: dict) -> dict:
 
     buffer = io.BytesIO()
     model.save(buffer, save_format='h5')
-    model_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
-
+    model_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')    
     return {
         "final_accuracy": history.history['accuracy'][-1],
         "final_val_accuracy": history.history['val_accuracy'][-1],
         "final_loss": history.history['loss'][-1],
         "epochs_run": len(history.history['accuracy']),
+        "model_b64": model_b64,
     }
 
 
