@@ -245,6 +245,7 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
               params={selectedNode.data.params || {}}
               onChange={(newParams) => updateNodeData(selectedNode.id, { params: newParams, checked: true })}
               dark={isDark}
+              columnTypes={getUpstreamColumnTypes(selectedNode.id)}
               columns={
                 selectedNode.data.nodeType === 'Encoder'
                   ? Object.entries(getUpstreamColumnTypes(selectedNode.id))

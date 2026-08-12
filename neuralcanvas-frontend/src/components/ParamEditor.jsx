@@ -1,12 +1,7 @@
 import { PARAM_SCHEMAS } from "../config/paramSchemas";
+import FeatureSelector from "./FeatureSelector";
 
-export default function ParamEditor({
-  nodeType,
-  params = {},
-  onChange,
-  dark,
-  columns = [],
-}) {
+export default function ParamEditor({ nodeType, params = {}, onChange, dark, columns = [], columnTypes = {} }) {
   const schema = PARAM_SCHEMAS[nodeType];
   if (!schema || schema.length === 0) return null;
 
@@ -86,64 +81,14 @@ export default function ParamEditor({
 
           {/* Multi Select */}
           {field.type === "multiselect" && (
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                gap: 6,
-                maxHeight: 140,
-                overflowY: "auto",
-                border: `1px solid ${c.border}`,
-                borderRadius: 8,
-                padding: 8,
-              }}
-            >
-              {columns.length === 0 && (
-                <span
-                  style={{
-                    fontSize: 11,
-                    color: c.label,
-                  }}
-                >
-                  No columns available — connect this node to a Split Dataset
-                  node first.
-                </span>
-              )}
-
-              {columns.map((col) => {
-                const selected = (params[field.name] || []).includes(col);
-
-                return (
-                  <label
-                    key={col}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 8,
-                      fontSize: 12,
-                      color: c.text,
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selected}
-                      onChange={() => {
-                        const current = params[field.name] || [];
-
-                        const next = selected
-                          ? current.filter((c) => c !== col)
-                          : [...current, col];
-
-                        handleChange(field.name, next);
-                      }}
-                    />
-
-                    {col}
-                  </label>
-                );
-              })}
-            </div>
+            <FeatureSelector
+              columns={columns}
+              columnTypes={columnTypes}
+              selected={params[field.name] || []}
+              onChange={(next) => handleChange(field.name, next)}
+              dark={dark}
+              allowedTypes={field.allowedTypes}
+            />
           )}
 
           {/* Feature Inputs — one labeled number box per training column */}

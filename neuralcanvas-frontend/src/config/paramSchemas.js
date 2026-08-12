@@ -101,8 +101,12 @@ export const PARAM_SCHEMAS = {
   { name: "mode", label: "Prediction Source", type: "select", options: ["test_split", "custom"], default: "test_split" },
   { name: "feature_values", label: "Feature Values", type: "feature_inputs", default: {} },
 ],
+
 Encoder: [
   { name: "method", label: "Encoding Method", type: "select", options: ["OneHot", "Label", "Ordinal"], default: "OneHot" },
-  { name: "features", label: "Features to Encode", type: "multiselect", options: [], default: [] },
+  { name: "features", label: "Features to Encode", type: "multiselect", allowedTypes: ["categorical", "text"], options: [], default: [] },
+],
+StandardScaler: [
+  { name: "columns", label: "Columns to Scale", type: "multiselect", allowedTypes: ["numerical"], options: [], default: [] },
 ],
 };
