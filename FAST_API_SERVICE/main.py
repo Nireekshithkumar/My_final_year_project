@@ -29,7 +29,7 @@ def execute(request: ExecuteRequest):
 
 @app.get("/algorithms")
 def list_algorithms():
-    from FAST_API_SERVICE.engine import ALGORITHM_REGISTRY, DL_ALGORITHMS
+    from engine import ALGORITHM_REGISTRY, DL_ALGORITHMS
     return {
         "ml": list(ALGORITHM_REGISTRY.keys()),
         "dl": DL_ALGORITHMS

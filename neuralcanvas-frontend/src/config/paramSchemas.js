@@ -103,10 +103,48 @@ export const PARAM_SCHEMAS = {
 ],
 
 Encoder: [
-  { name: "method", label: "Encoding Method", type: "select", options: ["OneHot", "Label", "Ordinal"], default: "OneHot" },
+  { name: "method", label: "Encoding Method", type: "select", options: ["OneHot", "Label", "Ordinal", "Target"], default: "OneHot" },
   { name: "features", label: "Features to Encode", type: "multiselect", allowedTypes: ["categorical", "text"], options: [], default: [] },
+  { name: "target_column", label: "Target Column (Target Enc.)", type: "select", options: [], default: "" },
 ],
+
+Vectorizer: [
+  { name: "method", label: "Vectorization Method", type: "select", options: ["TF-IDF", "CountVectorizer"], default: "TF-IDF" },
+  { name: "features", label: "Text Features", type: "multiselect", allowedTypes: ["text"], options: [], default: [] },
+  { name: "max_features", label: "Max Features / Vocab", type: "number", default: 100 },
+],
+
 StandardScaler: [
+  { name: "apply_all", label: "Apply to All Numerical Features", type: "boolean", default: true },
   { name: "columns", label: "Columns to Scale", type: "multiselect", allowedTypes: ["numerical"], options: [], default: [] },
+],
+
+MinMaxScaler: [
+  { name: "apply_all", label: "Apply to All Numerical Features", type: "boolean", default: true },
+  { name: "columns", label: "Columns to Scale", type: "multiselect", allowedTypes: ["numerical"], options: [], default: [] },
+  { name: "feature_range_min", label: "Range Min", type: "number", default: 0 },
+  { name: "feature_range_max", label: "Range Max", type: "number", default: 1 },
+],
+
+RobustScaler: [
+  { name: "apply_all", label: "Apply to All Numerical Features", type: "boolean", default: true },
+  { name: "columns", label: "Columns to Scale", type: "multiselect", allowedTypes: ["numerical"], options: [], default: [] },
+],
+
+MaxAbsScaler: [
+  { name: "apply_all", label: "Apply to All Numerical Features", type: "boolean", default: true },
+  { name: "columns", label: "Columns to Scale", type: "multiselect", allowedTypes: ["numerical"], options: [], default: [] },
+],
+
+Normalizer: [
+  { name: "apply_all", label: "Apply to All Numerical Features", type: "boolean", default: true },
+  { name: "columns", label: "Columns to Scale", type: "multiselect", allowedTypes: ["numerical"], options: [], default: [] },
+],
+
+HyperparamTuning: [
+  { name: "algorithm", label: "Target Algorithm", type: "select", options: ["RandomForestClassifier", "LogisticRegression", "SVC", "DecisionTreeClassifier"], default: "RandomForestClassifier" },
+  { name: "search_method", label: "Search Strategy", type: "select", options: ["GridSearch", "RandomSearch"], default: "GridSearch" },
+  { name: "cv_folds", label: "Cross-Validation Folds", type: "number", default: 5 },
+  { name: "param_grid", label: "Parameter Grid (JSON string)", type: "text", default: '{"n_estimators": [10, 50], "max_depth": [3, 5]}' },
 ],
 };

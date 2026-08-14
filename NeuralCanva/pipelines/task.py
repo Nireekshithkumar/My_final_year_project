@@ -105,12 +105,19 @@ def execute_graph(self, graph_id):
                 from datasets.models import Dataset
                 import pandas as pd
                 dataset_id = node['data'].get('datasetId')
-                dataset = Dataset.objects.get(id=dataset_id)
+                if not dataset_id:
+                    raise ValueError("Dataset not selected for Load Dataset node.")
+                try:
+                    dataset = Dataset.objects.get(id=dataset_id)
+                except Dataset.DoesNotExist:
+                    raise ValueError(f"Dataset with ID {dataset_id} does not exist. Please re-upload or select a valid dataset.")
+
                 df = pd.read_csv(dataset.file.path)
-                node_outputs[node_id] = {"dataframe": df.to_dict(orient='list'), "columns": list(df.columns)}
+                node_outputs[node_id] = {"dataframe": df.to_dict(orient='list'), "columns": list(df.columns), "column_types": dataset.column_types}
                 percent_after = int(((i + 1) / total_nodes) * 100)
-                broadcast(graph.pipeline_id, f"Loaded dataset: {dataset.name}", stage=node_type, percent=percent_after)
+                broadcast(graph.pipeline_id, f"Loaded dataset: {dataset.name} ({len(df)} rows, {len(df.columns)} cols)", stage=node_type, percent=percent_after)
                 continue
+
             if node_type == 'Encoder':
                 import pandas as pd
                 from sklearn.preprocessing import OneHotEncoder, LabelEncoder, OrdinalEncoder
@@ -125,10 +132,22 @@ def execute_graph(self, graph_id):
                     df = pd.get_dummies(df, columns=features, drop_first=False)
                 elif method == 'Label':
                     for col in features:
-                        df[col] = LabelEncoder().fit_transform(df[col].astype(str))
+                        if col in df.columns:
+                            df[col] = LabelEncoder().fit_transform(df[col].astype(str))
                 elif method == 'Ordinal':
-                    enc = OrdinalEncoder()
-                    df[features] = enc.fit_transform(df[features].astype(str))
+                    valid_feats = [f for f in features if f in df.columns]
+                    if valid_feats:
+                        enc = OrdinalEncoder()
+                        df[valid_feats] = enc.fit_transform(df[valid_feats].astype(str))
+                elif method == 'Target':
+                    target_col = node['data'].get('params', {}).get('target_column')
+                    if not target_col and 'target_column' in parent_ids:
+                        target_col = parent_ids['target_column']
+                    if target_col and target_col in df.columns:
+                        for col in features:
+                            if col in df.columns:
+                                means = df.groupby(col)[target_col].transform('mean')
+                                df[col] = means
             
                 after_cols = len(df.columns)
                 node_outputs[node_id] = {"dataframe": df.to_dict(orient='list'), "columns": list(df.columns)}
@@ -145,8 +164,15 @@ def execute_graph(self, graph_id):
                 parent_output = input_data
                 df = pd.DataFrame(parent_output['dataframe'])
                 target_column = node['data'].get('params', {}).get('target_column')
+                if not target_column or target_column not in df.columns:
+                    raise ValueError(f"Target column '{target_column}' not found in dataset columns: {list(df.columns)}")
+
+                initial_rows = len(df)
                 df = df.dropna()
-            
+                dropped_rows = initial_rows - len(df)
+                if dropped_rows > 0:
+                    broadcast(graph.pipeline_id, f"Warning: Removed {dropped_rows} rows containing missing/NaN values.", stage="warning")
+
                 feature_df = df.drop(columns=[target_column])
                 numeric_cols = feature_df.select_dtypes(include=['number']).columns.tolist()
                 X = feature_df[numeric_cols].values.tolist()
@@ -154,7 +180,7 @@ def execute_graph(self, graph_id):
             
                 node_outputs[node_id] = {"X": X, "y": y, "columns": numeric_cols}
                 percent_after = int(((i + 1) / total_nodes) * 100)
-                broadcast(graph.pipeline_id, "Split dataset into train/test", stage=node_type, percent=percent_after)
+                broadcast(graph.pipeline_id, f"Split dataset on '{target_column}' — features: {len(numeric_cols)}", stage=node_type, percent=percent_after)
                 continue
 
             if node_type == 'predict':
@@ -195,10 +221,10 @@ def execute_graph(self, graph_id):
                 for sf in scaler_files:
                     with open(sf) as f:
                         sp = json.load(f)
-                    if 'mean' in sp:
-                        X_input = [[(v - m) / s for v, m, s in zip(values, sp['mean'], sp['scale'])]]
-                    elif 'data_min' in sp:
-                        X_input = [[(v - mn) / (mx - mn) for v, mn, mx in zip(values, sp['data_min'], sp['data_max'])]]
+                    if 'mean' in sp and sp['mean']:
+                        X_input = [[(v - m) / s if s != 0 else 0 for v, m, s in zip(values, sp['mean'], sp['scale'])]]
+                    elif 'data_min' in sp and sp['data_min']:
+                        X_input = [[(v - mn) / (mx - mn) if mx != mn else 0 for v, mn, mx in zip(values, sp['data_min'], sp['data_max'])]]
             
                 import numpy as np
                 prediction = model.predict(np.array(X_input))
@@ -208,6 +234,7 @@ def execute_graph(self, graph_id):
                 percent_after = int(((i + 1) / total_nodes) * 100)
                 broadcast(graph.pipeline_id, f"Prediction: {pred_value}", stage="predict", percent=percent_after)
                 continue
+
             payload = {
                 "algorithm_type": node_type,
                 "params": node['data'].get('params', {}),
@@ -249,6 +276,7 @@ def execute_graph(self, graph_id):
 
         graph.status = 'success'
         graph.result = final_output
+        graph.node_outputs = node_outputs
         graph.elapsed_seconds = elapsed
         graph.save()
 

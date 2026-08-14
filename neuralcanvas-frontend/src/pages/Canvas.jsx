@@ -17,6 +17,9 @@ import TaskNode from '../components/nodes/TaskNode'
 import DatasetUpload from '../components/DatasetUpload'
 import ParamEditor from '../components/ParamEditor'
 import Toolbar from '../components/Toolbar'
+import DatasetViewer from '../components/DatasetViewer'
+import TransformationHistory from '../components/TransformationHistory'
+import ChartPanel from '../components/ChartPanel'
 import { PARAM_SCHEMAS } from '../config/paramSchemas'
 import api from '../api/axios'
 import useStore from '../store/useStore'
@@ -33,12 +36,13 @@ const OUTPUT_PRESETS = {
   default: [{ id: 'next', label: 'Connection Task', color: '#22c55e' }],
 }
 
-const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, isDark }, ref) {
+const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, isDark, refreshTrigger, setRefreshTrigger }, ref) {
   const reactFlowWrapper = useRef(null)
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const { screenToFlowPosition } = useReactFlow()
   const [selectedNodeId, setSelectedNodeId] = useState(null)
+  const [activeTab, setActiveTab] = useState('config') // 'config' | 'charts'
   const [error, setError] = useState('')
 
   const selectedNode = nodes.find((node) => node.id === selectedNodeId)
@@ -64,6 +68,7 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     if (parentNode.data?.columns) return parentNode.data.columns
     return getUpstreamColumns(parentNode.id)
   }, [edges, nodes])
+
   const getUpstreamColumnTypes = useCallback((nodeId) => {
     const parentEdge = edges.find((e) => e.target === nodeId)
     if (!parentEdge) return {}
@@ -79,13 +84,28 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
 
     try {
       const { data } = await api.post(`/pipelines/${pipelineId}/predict/`, { feature_values: featureValues })
-      updateNodeData(nodeId, { lastPrediction: data.prediction })
+      updateNodeData(nodeId, { lastPrediction: data.prediction, status: 'success' })
     } catch (err) {
       updateNodeData(nodeId, {
         lastPrediction: 'Error: ' + (err.response?.data?.error || 'prediction failed'),
+        status: 'failed',
       })
     }
   }, [nodes, pipelineId, updateNodeData])
+
+  const handleRunNode = useCallback(async (nodeId) => {
+    updateNodeData(nodeId, { status: 'running' })
+    setError('')
+    try {
+      await api.post(`/pipelines/${pipelineId}/nodes/${nodeId}/run/`)
+      updateNodeData(nodeId, { status: 'success' })
+      setRefreshTrigger((t) => t + 1)
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Node execution failed.'
+      setError(msg)
+      updateNodeData(nodeId, { status: 'failed' })
+    }
+  }, [pipelineId, updateNodeData, setRefreshTrigger])
 
   const onConnect = useCallback(
     (params) =>
@@ -122,14 +142,16 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
           title: label,
           subtitle: label,
           checked: true,
+          status: 'ready',
           outputs: type === 'end' ? [] : (OUTPUT_PRESETS[type] || OUTPUT_PRESETS.default),
           onPredict: handlePredict,
+          onRunNode: handleRunNode,
         },
       }
       setNodes((currentNodes) => currentNodes.concat(newNode))
       onStatusChange('idle')
     },
-    [onStatusChange, screenToFlowPosition, setNodes, handlePredict]
+    [onStatusChange, screenToFlowPosition, setNodes, handlePredict, handleRunNode]
   )
 
   const saveGraph = useCallback(async () => {
@@ -152,12 +174,14 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     try {
       setError('')
       onStatusChange('running')
+      setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'running' } })))
       await api.post(`/pipelines/${pipelineId}/execute/`)
     } catch (err) {
       onStatusChange('failed')
       setError(err.response?.data?.detail || 'Unable to run the workflow.')
+      setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'failed' } })))
     }
-  }, [onStatusChange, pipelineId])
+  }, [onStatusChange, pipelineId, setNodes])
 
   const clearGraph = useCallback(() => {
     setNodes([])
@@ -174,9 +198,15 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
 
       try {
         const { data } = await api.get(`/pipelines/${pipelineId}/graph/`)
-        const loadedNodes = (data.nodes || []).map((n) =>
-          n.data?.nodeType === 'predict' ? { ...n, data: { ...n.data, onPredict: handlePredict } } : n
-        )
+        const loadedNodes = (data.nodes || []).map((n) => ({
+          ...n,
+          data: {
+            ...n.data,
+            onPredict: handlePredict,
+            onRunNode: handleRunNode,
+            status: n.data?.status || 'ready',
+          },
+        }))
         setNodes(loadedNodes)
         setEdges(data.edges || [])
       } catch {
@@ -188,89 +218,158 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
   }, [pipelineId])
 
   return (
-    <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
-      <NodePalette />
-      <div style={{ flex: 1, minHeight: 0 }} ref={reactFlowWrapper}>
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          nodeTypes={nodeTypes}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          onDrop={onDrop}
-          onDragOver={onDragOver}
-          onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-          onPaneClick={() => setSelectedNodeId(null)}
-          fitView
-        >
-          <Background
-            variant={BackgroundVariant.Lines}
-            gap={20}
-            size={1}
-            color={isDark ? '#334155' : '#5084c7'}
-          />
-          <Controls />
-        </ReactFlow>
-      </div>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      {/* Transformation History Stepper */}
+      <TransformationHistory
+        nodes={nodes}
+        edges={edges}
+        selectedNodeId={selectedNodeId}
+        onSelectNode={setSelectedNodeId}
+        isDark={isDark}
+      />
 
-      {selectedNode && (
+      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+        <NodePalette />
+        <div style={{ flex: 1, minHeight: 0, position: 'relative' }} ref={reactFlowWrapper}>
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            nodeTypes={nodeTypes}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onDrop={onDrop}
+            onDragOver={onDragOver}
+            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+            onPaneClick={() => setSelectedNodeId(null)}
+            fitView
+          >
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={24}
+              size={1}
+              color="rgba(99,102,241,0.08)"
+            />
+            <Controls />
+          </ReactFlow>
+
+          {error && (
+            <div
+              style={{
+                position: 'absolute', bottom: 16, right: 16,
+                background: '#fee2e2', color: '#b91c1c',
+                padding: '8px 12px', borderRadius: 8, zIndex: 100, fontSize: 12,
+              }}
+            >
+              {error}
+            </div>
+          )}
+        </div>
+
+        {/* Right Dock Panel (Node Config / Charts Tabs) */}
         <div
           style={{
             width: 300,
-            borderLeft: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`,
-            padding: 16,
-            background: isDark ? '#1e293b' : '#fff',
-            color: isDark ? '#f1f5f9' : '#0f172a',
+            borderLeft: 'rgba(99,102,241,0.15)',
+            display: 'flex', flexDirection: 'column',
+            background: 'rgba(8,12,20,0.95)',
+            color: '#e2e8f0',
+            backdropFilter: 'blur(10px)',
+            borderLeft: '1px solid rgba(99,102,241,0.12)',
           }}
         >
-          <h3 style={{ marginBottom: 12, fontSize: 14 }}>{selectedNode.data.title}</h3>
+          {/* Tab Switcher */}
+          <div style={{ display: 'flex', borderBottom: '1px solid rgba(99,102,241,0.12)' }}>
+            <button
+              onClick={() => setActiveTab('config')}
+              style={{
+                flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 700,
+                border: 'none',
+                background: activeTab === 'config' ? 'rgba(99,102,241,0.1)' : 'transparent',
+                color: activeTab === 'config' ? '#a5b4fc' : '#475569',
+                cursor: 'pointer',
+                borderBottom: activeTab === 'config' ? '2px solid #6366f1' : '2px solid transparent',
+                transition: 'all 0.2s',
+              }}
+            >
+              ⚙ Node Config
+            </button>
+            <button
+              onClick={() => setActiveTab('charts')}
+              style={{
+                flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 700,
+                border: 'none',
+                background: activeTab === 'charts' ? 'rgba(99,102,241,0.1)' : 'transparent',
+                color: activeTab === 'charts' ? '#a5b4fc' : '#475569',
+                cursor: 'pointer',
+                borderBottom: activeTab === 'charts' ? '2px solid #6366f1' : '2px solid transparent',
+                transition: 'all 0.2s',
+              }}
+            >
+              📈 Charts & EDA
+            </button>
+          </div>
 
-          {selectedNode.data.nodeType === 'loadDataset' && (
-            <DatasetUpload
-              onUploaded={(dataset) =>
-                updateNodeData(selectedNode.id, {
-                  datasetId: dataset.id,
-                  columns: dataset.columns,
-                  columnTypes: dataset.column_types,
-                  subtitle: dataset.name,
-                })
-              }
-            />
-          )}
+          <div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>
+            {activeTab === 'config' && selectedNode && (
+              <div>
+                <h3 style={{ marginBottom: 12, fontSize: 14 }}>{selectedNode.data.title}</h3>
 
-          {PARAM_SCHEMAS[selectedNode.data.nodeType] !== undefined && (
-            <ParamEditor
-              nodeType={selectedNode.data.nodeType}
-              params={selectedNode.data.params || {}}
-              onChange={(newParams) => updateNodeData(selectedNode.id, { params: newParams, checked: true })}
-              dark={isDark}
-              columnTypes={getUpstreamColumnTypes(selectedNode.id)}
-              columns={
-                selectedNode.data.nodeType === 'Encoder'
-                  ? Object.entries(getUpstreamColumnTypes(selectedNode.id))
-                    .filter(([, t]) => t === 'categorical' || t === 'text')
-                    .map(([name]) => name)
-                  : ['splitDataset', 'StandardScaler', 'MinMaxScaler', 'predict'].includes(selectedNode.data.nodeType)
-                    ? getUpstreamColumns(selectedNode.id)
-                    : []
-              }
-            />
-          )}
+                {selectedNode.data.nodeType === 'loadDataset' && (
+                  <DatasetUpload
+                    onUploaded={(dataset) =>
+                      updateNodeData(selectedNode.id, {
+                        datasetId: dataset.id,
+                        columns: dataset.columns,
+                        columnTypes: dataset.column_types,
+                        subtitle: dataset.name,
+                        status: 'ready',
+                      })
+                    }
+                  />
+                )}
+
+                {PARAM_SCHEMAS[selectedNode.data.nodeType] !== undefined && (
+                  <ParamEditor
+                    nodeType={selectedNode.data.nodeType}
+                    params={selectedNode.data.params || {}}
+                    onChange={(newParams) => updateNodeData(selectedNode.id, { params: newParams, checked: true })}
+                    dark={isDark}
+                    columnTypes={getUpstreamColumnTypes(selectedNode.id)}
+                    columns={
+                      selectedNode.data.nodeType === 'Encoder'
+                        ? Object.entries(getUpstreamColumnTypes(selectedNode.id))
+                          .filter(([, t]) => t === 'categorical' || t === 'text')
+                          .map(([name]) => name)
+                        : ['splitDataset', 'StandardScaler', 'MinMaxScaler', 'RobustScaler', 'MaxAbsScaler', 'Normalizer', 'predict'].includes(selectedNode.data.nodeType)
+                          ? getUpstreamColumns(selectedNode.id)
+                          : []
+                    }
+                  />
+                )}
+              </div>
+            )}
+
+            {activeTab === 'config' && !selectedNode && (
+              <div style={{ color: isDark ? '#94a3b8' : '#64748b', fontSize: 12, textAlign: 'center', marginTop: 40 }}>
+                Select any block on the canvas to configure its parameters.
+              </div>
+            )}
+
+            {activeTab === 'charts' && (
+              <ChartPanel pipelineId={pipelineId} selectedNodeId={selectedNodeId} isDark={isDark} />
+            )}
+          </div>
         </div>
-      )}
+      </div>
 
-      {error && (
-        <div
-          style={{
-            position: 'absolute', bottom: 16, right: 16,
-            background: '#fee2e2', color: '#b91c1c',
-            padding: '8px 12px', borderRadius: 8,
-          }}
-        >
-          {error}
-        </div>
-      )}
+      {/* Dataset Spreadsheet Footer Viewer */}
+      <DatasetViewer
+        pipelineId={pipelineId}
+        selectedNodeId={selectedNodeId}
+        isDark={isDark}
+        refreshTrigger={refreshTrigger}
+      />
     </div>
   )
 })
@@ -283,6 +382,7 @@ export default function Canvas() {
   const [status, setStatus] = useState('idle')
   const [progress, setProgress] = useState(0)
   const [predictionResult, setPredictionResult] = useState(null)
+  const [refreshTrigger, setRefreshTrigger] = useState(0)
   const flowRef = useRef(null)
   const theme = useStore((s) => s.theme)
   const isDark = theme === 'dark'
@@ -307,9 +407,10 @@ export default function Canvas() {
   }, [navigate, pipelineId])
 
   useEffect(() => {
-    if (!pipelineId || status !== 'running') return
+    if (!pipelineId) return
 
-    const ws = new WebSocket(`ws://localhost:8080/ws/runs/${pipelineId}/logs/`)
+    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/runs/${pipelineId}/logs/`)
 
     ws.onmessage = (event) => {
       const data = JSON.parse(event.data)
@@ -321,8 +422,11 @@ export default function Canvas() {
       }
       if (data.stage === 'done' || data.stage === 'cached') {
         setStatus('success')
+        setRefreshTrigger((t) => t + 1)
       } else if (data.stage === 'error') {
         setStatus('failed')
+      } else if (data.stage === 'node_success') {
+        setRefreshTrigger((t) => t + 1)
       }
     }
 
@@ -331,7 +435,7 @@ export default function Canvas() {
     }
 
     return () => ws.close()
-  }, [pipelineId, status])
+  }, [pipelineId])
 
   const handleUpdate = async () => {
     if (!pipelineId) return
@@ -388,33 +492,42 @@ export default function Canvas() {
       />
 
       <ReactFlowProvider>
-        <FlowCanvas ref={flowRef} pipelineId={pipelineId} onStatusChange={setStatus} isDark={isDark} />
+        <FlowCanvas
+          ref={flowRef}
+          pipelineId={pipelineId}
+          onStatusChange={setStatus}
+          isDark={isDark}
+          refreshTrigger={refreshTrigger}
+          setRefreshTrigger={setRefreshTrigger}
+        />
       </ReactFlowProvider>
     </div>
   )
 }
 
-const topbar = (isDark) => ({
+const topbar = () => ({
   wrap: {
     display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end',
-    padding: '12px 20px', borderBottom: `1px solid ${isDark ? '#334155' : '#e2e8f0'}`,
-    background: isDark ? '#1e293b' : '#f8fafc',
-    fontFamily: 'Inter, sans-serif',
+    padding: '10px 18px', borderBottom: '1px solid rgba(99,102,241,0.12)',
+    background: 'rgba(8,12,20,0.95)',
+    fontFamily: "'Inter', sans-serif",
+    backdropFilter: 'blur(10px)',
   },
-  label: { fontWeight: 700, fontSize: 15, color: isDark ? '#f1f5f9' : '#0f172a' },
-  fields: { display: 'flex', gap: 14, alignItems: 'flex-end' },
-  small: { fontSize: 11, color: isDark ? '#94a3b8' : '#475569', display: 'block', marginBottom: 2 },
+  label: { fontWeight: 800, fontSize: 13, color: '#94a3b8', fontFamily: "'Space Grotesk', sans-serif" },
+  fields: { display: 'flex', gap: 12, alignItems: 'flex-end' },
+  small: { fontSize: 10.5, color: '#475569', display: 'block', marginBottom: 4 },
   input: {
-    border: `1px solid ${isDark ? '#475569' : '#cbd5e1'}`, borderRadius: 6,
-    padding: '6px 10px', fontSize: 13, minWidth: 200,
-    background: isDark ? '#0f172a' : '#fff', color: isDark ? '#f1f5f9' : '#0f172a',
+    border: '1px solid rgba(99,102,241,0.2)', borderRadius: 8,
+    padding: '6px 10px', fontSize: 13, minWidth: 180,
+    background: 'rgba(99,102,241,0.06)', color: '#e2e8f0',
+    outline: 'none', fontFamily: 'inherit',
   },
   btnGray: {
-    background: isDark ? '#334155' : '#e2e8f0', color: isDark ? '#f1f5f9' : '#0f172a',
-    border: 'none', borderRadius: 6, padding: '8px 14px', fontSize: 12, cursor: 'pointer',
+    background: 'rgba(99,102,241,0.1)', color: '#a5b4fc',
+    border: '1px solid rgba(99,102,241,0.2)', borderRadius: 8, padding: '7px 13px', fontSize: 12, cursor: 'pointer', fontWeight: 600,
   },
   btnDark: {
-    background: '#312e81', color: '#fff', border: 'none', borderRadius: 6,
-    padding: '8px 14px', fontSize: 12, cursor: 'pointer', fontWeight: 600,
+    background: 'rgba(139,92,246,0.15)', color: '#c4b5fd', border: '1px solid rgba(139,92,246,0.3)',
+    borderRadius: 8, padding: '7px 13px', fontSize: 12, cursor: 'pointer', fontWeight: 700,
   },
 })

@@ -8,6 +8,12 @@ MODEL (scikit-learn, pickle format):
         model = pickle.load(f)
     predictions = model.predict(X_new)
 
+MINMAXSCALER (JSON params — reconstruct manually):
+    import json, numpy as np
+    with open('MinMaxScaler.json') as f:
+        params = json.load(f)
+    # For StandardScaler: X_scaled = (X_new - mean) / scale
+
 STANDARDSCALER (JSON params — reconstruct manually):
     import json, numpy as np
     with open('StandardScaler.json') as f:

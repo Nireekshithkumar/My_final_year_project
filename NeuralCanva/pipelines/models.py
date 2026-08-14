@@ -26,9 +26,9 @@ class Graph(models.Model):
     edges = models.JSONField(default=list)   # [{"source": "1", "target": "2"}]
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='idle')
     result = models.JSONField(null=True, blank=True)
+    node_outputs = models.JSONField(default=dict, blank=True)
     error = models.TextField(blank=True)
     updated_at = models.DateTimeField(auto_now=True)
-    # pipelines/models.py — add to Graph model
     elapsed_seconds = models.FloatField(null=True, blank=True)
 
     def __str__(self):
