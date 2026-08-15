@@ -20,6 +20,8 @@ import Toolbar from '../components/Toolbar'
 import DatasetViewer from '../components/DatasetViewer'
 import TransformationHistory from '../components/TransformationHistory'
 import ChartPanel from '../components/ChartPanel'
+import ErrorBoundary from '../components/ErrorBoundary'
+import ExecutionLogs from '../components/ExecutionLogs'
 import { PARAM_SCHEMAS } from '../config/paramSchemas'
 import api from '../api/axios'
 import useStore from '../store/useStore'
@@ -36,12 +38,23 @@ const OUTPUT_PRESETS = {
   default: [{ id: 'next', label: 'Connection Task', color: '#22c55e' }],
 }
 
-const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, isDark, refreshTrigger, setRefreshTrigger }, ref) {
+const FlowCanvas = forwardRef(function FlowCanvas({
+  pipelineId,
+  onStatusChange,
+  isDark,
+  refreshTrigger,
+  setRefreshTrigger,
+  logs = [],
+  setLogs,
+  progress = 0,
+  status = 'idle',
+}, ref) {
   const reactFlowWrapper = useRef(null)
   const [nodes, setNodes, onNodesChange] = useNodesState([])
   const [edges, setEdges, onEdgesChange] = useEdgesState([])
   const { screenToFlowPosition } = useReactFlow()
   const [selectedNodeId, setSelectedNodeId] = useState(null)
+
   const [activeTab, setActiveTab] = useState('config') // 'config' | 'charts'
   const [error, setError] = useState('')
 
@@ -269,10 +282,10 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     }
 
     loadGraph()
-  }, [pipelineId])
+  }, [pipelineId, handlePredict, handleRunNode, setNodes, setEdges])
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, height: 'calc(100vh - 110px)', position: 'relative' }}>
       {/* Transformation History Stepper */}
       <TransformationHistory
         nodes={nodes}
@@ -282,9 +295,26 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
         isDark={isDark}
       />
 
-      <div style={{ display: 'flex', flex: 1, minHeight: 0 }}>
+      {error && (
+        <div style={{
+          background: 'rgba(239, 68, 68, 0.15)',
+          borderBottom: '1px solid rgba(239, 68, 68, 0.3)',
+          padding: '8px 16px',
+          fontSize: 12,
+          color: '#fca5a5',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          zIndex: 20,
+        }}>
+          <span>⚠ {error}</span>
+          <button onClick={() => setError('')} style={{ background: 'transparent', border: 'none', color: '#fca5a5', cursor: 'pointer' }}>✕</button>
+        </div>
+      )}
+
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         <NodePalette />
-        <div style={{ flex: 1, minHeight: 0, position: 'relative' }} ref={reactFlowWrapper}>
+        <div style={{ flex: 1, position: 'relative', height: '100%' }} ref={reactFlowWrapper}>
           <ReactFlow
             nodes={nodes}
             edges={edges}
@@ -297,77 +327,77 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
             onNodeClick={(_, node) => setSelectedNodeId(node.id)}
             onPaneClick={() => setSelectedNodeId(null)}
             fitView
+            connectionRadius={32}
+            defaultEdgeOptions={{
+              type: 'smoothstep',
+              animated: true,
+              style: { stroke: '#ff0071', strokeWidth: 2, strokeDasharray: '5, 5' },
+              markerEnd: { type: MarkerType.ArrowClosed, color: '#ff0071', width: 18, height: 18 },
+            }}
           >
             <Background
               variant={BackgroundVariant.Dots}
-              gap={24}
-              size={1}
-              color="rgba(99,102,241,0.08)"
+              gap={20}
+              size={1.5}
+              color="rgba(255, 0, 113, 0.15)"
             />
             <Controls />
           </ReactFlow>
-
-          {error && (
-            <div
-              style={{
-                position: 'absolute', bottom: 16, right: 16,
-                background: '#fee2e2', color: '#b91c1c',
-                padding: '8px 12px', borderRadius: 8, zIndex: 100, fontSize: 12,
-              }}
-            >
-              {error}
-            </div>
-          )}
         </div>
 
         {/* Right Dock Panel (Node Config / Charts Tabs) */}
         <div
           style={{
-            width: 300,
-            borderLeft: 'rgba(99,102,241,0.15)',
+            width: 340,
             display: 'flex', flexDirection: 'column',
-            background: 'rgba(8,12,20,0.95)',
+            background: 'rgba(10, 15, 26, 0.95)',
             color: '#e2e8f0',
-            backdropFilter: 'blur(10px)',
-            borderLeft: '1px solid rgba(99,102,241,0.12)',
+            backdropFilter: 'blur(16px)',
+            borderLeft: '1px solid rgba(255, 255, 255, 0.08)',
           }}
         >
           {/* Tab Switcher */}
-          <div style={{ display: 'flex', borderBottom: '1px solid rgba(99,102,241,0.12)' }}>
-            <button
-              onClick={() => setActiveTab('config')}
-              style={{
-                flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 700,
-                border: 'none',
-                background: activeTab === 'config' ? 'rgba(99,102,241,0.1)' : 'transparent',
-                color: activeTab === 'config' ? '#a5b4fc' : '#475569',
-                cursor: 'pointer',
-                borderBottom: activeTab === 'config' ? '2px solid #6366f1' : '2px solid transparent',
-                transition: 'all 0.2s',
-              }}
-            >
-              ⚙ Node Config
-            </button>
-            <button
-              onClick={() => setActiveTab('charts')}
-              style={{
-                flex: 1, padding: '10px 0', fontSize: 12, fontWeight: 700,
-                border: 'none',
-                background: activeTab === 'charts' ? 'rgba(99,102,241,0.1)' : 'transparent',
-                color: activeTab === 'charts' ? '#a5b4fc' : '#475569',
-                cursor: 'pointer',
-                borderBottom: activeTab === 'charts' ? '2px solid #6366f1' : '2px solid transparent',
-                transition: 'all 0.2s',
-              }}
-            >
-              📈 Charts & EDA
-            </button>
+          <div style={{ display: 'flex', borderBottom: '1px solid rgba(255, 255, 255, 0.08)', padding: '0 4px' }}>
+            {[
+              { id: 'config', label: '⚙ Config' },
+              { id: 'charts', label: '📈 EDA & Metrics' },
+              { id: 'logs', label: `📋 Logs${logs.length ? ` (${logs.length})` : ''}` },
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                style={{
+                  flex: 1, padding: '12px 4px', fontSize: 11.5, fontWeight: 700,
+                  border: 'none',
+                  background: 'transparent',
+                  color: activeTab === tab.id ? '#ff85be' : '#64748b',
+                  cursor: 'pointer',
+                  borderBottom: activeTab === tab.id ? '2px solid #ff0071' : '2px solid transparent',
+                  transition: 'all 0.2s',
+                  letterSpacing: 0.1,
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
           </div>
 
-          <div style={{ flex: 1, padding: 16, overflowY: 'auto' }}>
+          <div style={{ flex: 1, padding: 14, overflowY: 'auto' }}>
             {activeTab === 'config' && selectedNode && (
               <div>
-                <h3 style={{ marginBottom: 12, fontSize: 14 }}>{selectedNode.data.title}</h3>
+                <div style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  marginBottom: 16,
+                  paddingBottom: 10,
+                  borderBottom: '1px solid rgba(255, 255, 255, 0.06)',
+                }}>
+                  <span style={{ fontSize: 14 }}>⚙️</span>
+                  <h3 style={{ fontSize: 13.5, fontWeight: 700, color: '#f8fafc' }}>{selectedNode.data.title}</h3>
+                </div>
+
 
                 {selectedNode.data.nodeType === 'loadDataset' && (
                   <DatasetUpload
@@ -421,7 +451,19 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
             )}
 
             {activeTab === 'charts' && (
-              <ChartPanel pipelineId={pipelineId} selectedNodeId={selectedNodeId} isDark={isDark} />
+              <ErrorBoundary>
+                <ChartPanel pipelineId={pipelineId} selectedNodeId={selectedNodeId} isDark={isDark} />
+              </ErrorBoundary>
+            )}
+
+            {activeTab === 'logs' && (
+              <ExecutionLogs
+                logs={logs}
+                isRunning={status === 'running'}
+                progress={progress}
+                onClearLogs={() => setLogs && setLogs([])}
+                pipelineId={pipelineId}
+              />
             )}
           </div>
         </div>
@@ -445,6 +487,7 @@ export default function Canvas() {
   const [workflowKey, setWorkflowKey] = useState('')
   const [status, setStatus] = useState('idle')
   const [progress, setProgress] = useState(0)
+  const [logs, setLogs] = useState([])
   const [predictionResult, setPredictionResult] = useState(null)
   const [refreshTrigger, setRefreshTrigger] = useState(0)
   const flowRef = useRef(null)
@@ -484,6 +527,16 @@ export default function Canvas() {
       if (data.stage === 'predict') {
         setPredictionResult(data.message)
       }
+      if (data.message) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: data.stage || 'EVENT',
+            message: data.message,
+          },
+        ])
+      }
       if (data.stage === 'done' || data.stage === 'cached') {
         setStatus('success')
         setRefreshTrigger((t) => t + 1)
@@ -491,6 +544,8 @@ export default function Canvas() {
         setStatus('failed')
       } else if (data.stage === 'node_success') {
         setRefreshTrigger((t) => t + 1)
+      } else if (data.stage === 'stopped') {
+        setStatus('idle')
       }
     }
 
@@ -509,6 +564,24 @@ export default function Canvas() {
       setStatus('saved')
     } catch {
       setStatus('failed')
+    }
+  }
+
+  const handleStop = async () => {
+    if (!pipelineId) return
+    try {
+      await api.post(`/pipelines/${pipelineId}/stop/`)
+      setStatus('idle')
+      setLogs((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString(),
+          stage: 'STOP',
+          message: 'Execution stopped by user.',
+        },
+      ])
+    } catch (err) {
+      console.error('Failed to stop execution:', err)
     }
   }
 
@@ -552,6 +625,7 @@ export default function Canvas() {
         status={status}
         onSave={() => flowRef.current?.saveGraph()}
         onRun={() => flowRef.current?.runGraph()}
+        onStop={handleStop}
         onClear={() => flowRef.current?.clearGraph()}
       />
 
@@ -563,11 +637,16 @@ export default function Canvas() {
           isDark={isDark}
           refreshTrigger={refreshTrigger}
           setRefreshTrigger={setRefreshTrigger}
+          logs={logs}
+          setLogs={setLogs}
+          progress={progress}
+          status={status}
         />
       </ReactFlowProvider>
     </div>
   )
 }
+
 
 const topbar = () => ({
   wrap: {

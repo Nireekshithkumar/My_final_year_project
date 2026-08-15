@@ -323,3 +323,221 @@ def apply_preprocess_step(node_type, ap, current_features):
     return current_features
 
 
+# ─── EDA & EVALUATION HELPERS ──────────────────────────────────────────────────
+
+def _extract_df(input_data):
+    """Safely extracts a pandas DataFrame from various input_data formats."""
+    if "dataframe" in input_data and input_data["dataframe"]:
+        return pd.DataFrame(input_data["dataframe"])
+    if "X_train" in input_data and "X_test" in input_data:
+        cols = input_data.get("columns", [f"feat_{i}" for i in range(len(input_data["X_train"][0]) if input_data["X_train"] else 0)])
+        tr = pd.DataFrame(input_data["X_train"], columns=cols)
+        te = pd.DataFrame(input_data["X_test"], columns=cols)
+        if "y_train" in input_data and input_data["y_train"]:
+            tr["target"] = input_data["y_train"]
+        if "y_test" in input_data and input_data["y_test"]:
+            te["target"] = input_data["y_test"]
+        return pd.concat([tr, te], ignore_index=True)
+    if "X" in input_data and input_data["X"]:
+        cols = input_data.get("columns", [f"feat_{i}" for i in range(len(input_data["X"][0]) if input_data["X"] else 0)])
+        df = pd.DataFrame(input_data["X"], columns=cols)
+        if "y" in input_data and input_data["y"]:
+            df["target"] = input_data["y"]
+        return df
+    return pd.DataFrame()
+
+
+def run_describe_node(input_data, params):
+    """Computes full summary statistics (count, mean, std, min, percentiles, skew, nulls)."""
+    df = _extract_df(input_data)
+    if df.empty:
+        raise ValueError("Input data is empty or missing tabular features to describe.")
+
+    desc = df.describe(include='all').replace({np.nan: None}).to_dict()
+    column_stats = {}
+    for col in df.columns:
+        s = df[col]
+        column_stats[col] = {
+            "dtype": str(s.dtype),
+            "null_count": int(s.isnull().sum()),
+            "null_pct": round(float(s.isnull().mean() * 100), 2),
+            "unique_count": int(s.nunique()),
+        }
+        if pd.api.types.is_numeric_dtype(s):
+            column_stats[col].update({
+                "mean": round(float(s.mean()), 4) if not s.isnull().all() else None,
+                "std": round(float(s.std()), 4) if len(s) > 1 and not s.isnull().all() else None,
+                "min": float(s.min()) if not s.isnull().all() else None,
+                "max": float(s.max()) if not s.isnull().all() else None,
+                "median": float(s.median()) if not s.isnull().all() else None,
+            })
+
+    result = dict(input_data)
+    result.update({
+        "statistics": desc,
+        "column_stats": column_stats,
+        "total_rows": len(df),
+        "total_columns": len(df.columns),
+        "columns": list(df.columns),
+    })
+    return result
+
+
+def run_correlation_node(input_data, params):
+    """Computes correlation matrix for numeric columns."""
+    df = _extract_df(input_data)
+    if df.empty:
+        raise ValueError("Input data is empty.")
+
+    num_df = df.select_dtypes(include=[np.number])
+    if num_df.empty:
+        raise ValueError("No numerical columns found to compute correlation.")
+
+    method = params.get("method", "pearson")
+    corr_matrix = num_df.corr(method=method).replace({np.nan: 0.0}).to_dict()
+
+    result = dict(input_data)
+    result.update({
+        "correlation_matrix": corr_matrix,
+        "numeric_columns": list(num_df.columns),
+        "columns": list(df.columns),
+    })
+    return result
+
+
+def run_missing_values_node(input_data, params):
+    """Detects and optionally handles missing values (drop / impute)."""
+    df = _extract_df(input_data)
+    strategy = params.get("strategy", "report_only") # 'drop', 'mean', 'median', 'mode', 'constant'
+
+    null_summary = df.isnull().sum().to_dict()
+    total_missing = sum(null_summary.values())
+
+    if strategy == "drop":
+        df = df.dropna()
+    elif strategy in ("mean", "median"):
+        for col in df.select_dtypes(include=[np.number]).columns:
+            val = df[col].mean() if strategy == "mean" else df[col].median()
+            df[col] = df[col].fillna(val)
+    elif strategy == "mode":
+        for col in df.columns:
+            if not df[col].empty:
+                mode_val = df[col].mode().iloc[0] if not df[col].mode().empty else 0
+                df[col] = df[col].fillna(mode_val)
+
+    result = dict(input_data)
+    result.update({
+        "dataframe": df.to_dict(orient="list"),
+        "columns": list(df.columns),
+        "null_summary": null_summary,
+        "total_missing_before": total_missing,
+        "rows_after": len(df),
+    })
+    return result
+
+
+def run_histogram_node(input_data, params):
+    """Generates distribution bins and counts for numerical features."""
+    df = _extract_df(input_data)
+    target_col = params.get("column") or (df.select_dtypes(include=[np.number]).columns[0] if not df.empty else None)
+    bins_count = int(params.get("bins", 10))
+
+    if not target_col or target_col not in df.columns:
+        raise ValueError(f"Column '{target_col}' not found for Histogram.")
+
+    series = pd.to_numeric(df[target_col], errors='coerce').dropna()
+    counts, bin_edges = np.histogram(series, bins=bins_count)
+    bins_data = [
+        {"bin": f"{round(bin_edges[i], 2)} - {round(bin_edges[i+1], 2)}", "count": int(counts[i])}
+        for i in range(len(counts))
+    ]
+
+    result = dict(input_data)
+    result.update({
+        "histogram": {"column": target_col, "bins": bins_data},
+        "columns": list(df.columns),
+    })
+    return result
+
+
+def run_boxplot_node(input_data, params):
+    """Computes five-number summary and detects outliers for boxplots."""
+    df = _extract_df(input_data)
+    target_col = params.get("column") or (df.select_dtypes(include=[np.number]).columns[0] if not df.empty else None)
+
+    if not target_col or target_col not in df.columns:
+        raise ValueError(f"Column '{target_col}' not found for Boxplot.")
+
+    series = pd.to_numeric(df[target_col], errors='coerce').dropna()
+    q1 = float(series.quantile(0.25))
+    median = float(series.median())
+    q3 = float(series.quantile(0.75))
+    iqr = q3 - q1
+    lower_bound = float(q1 - 1.5 * iqr)
+    upper_bound = float(q3 + 1.5 * iqr)
+    outliers = series[(series < lower_bound) | (series > upper_bound)].tolist()
+
+    result = dict(input_data)
+    result.update({
+        "boxplot": {
+            "column": target_col,
+            "min": float(series.min()),
+            "q1": q1,
+            "median": median,
+            "q3": q3,
+            "max": float(series.max()),
+            "lower_whisker": lower_bound,
+            "upper_whisker": upper_bound,
+            "outliers_count": len(outliers),
+        },
+        "columns": list(df.columns),
+    })
+    return result
+
+
+def run_evaluate_node(input_data, params):
+    """Evaluates classification or regression metrics from upstream prediction / model results."""
+    from sklearn.metrics import (
+        accuracy_score, precision_score, recall_score, f1_score,
+        mean_squared_error, mean_absolute_error, r2_score, confusion_matrix
+    )
+    preds = input_data.get("predictions")
+    actual = input_data.get("actual", input_data.get("y_test"))
+
+    if preds is None or actual is None:
+        raise ValueError("Evaluation node requires upstream predictions and actual target values.")
+
+    min_len = min(len(preds), len(actual))
+    y_p = preds[:min_len]
+    y_t = actual[:min_len]
+
+    # Detect regression vs classification
+    is_regression = any(isinstance(v, float) and not v.is_integer() for v in y_p[:20] if v is not None)
+
+    metrics = {}
+    if is_regression:
+        mse = float(mean_squared_error(y_t, y_p))
+        metrics = {
+            "task_type": "regression",
+            "mse": round(mse, 4),
+            "rmse": round(float(np.sqrt(mse)), 4),
+            "mae": round(float(mean_absolute_error(y_t, y_p)), 4),
+            "r2": round(float(r2_score(y_t, y_p)), 4),
+        }
+    else:
+        acc = float(accuracy_score(y_t, y_p))
+        metrics = {
+            "task_type": "classification",
+            "accuracy": round(acc, 4),
+            "precision": round(float(precision_score(y_t, y_p, average='weighted', zero_division=0)), 4),
+            "recall": round(float(recall_score(y_t, y_p, average='weighted', zero_division=0)), 4),
+            "f1": round(float(f1_score(y_t, y_p, average='weighted', zero_division=0)), 4),
+            "confusion_matrix": confusion_matrix(y_t, y_p).tolist(),
+        }
+
+    result = dict(input_data)
+    result["metrics"] = metrics
+    return result
+
+
+

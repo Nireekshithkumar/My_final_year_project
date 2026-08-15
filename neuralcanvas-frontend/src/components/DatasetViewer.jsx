@@ -157,22 +157,23 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
 }
 
 const darkStyles = {
-  container: { background: "#0f172a", borderTop: "1px solid #334155", color: "#f1f5f9", fontFamily: "Inter, sans-serif" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 16px", borderBottom: "1px solid #1e293b" },
-  metaPill: { background: "#1e293b", padding: "2px 8px", borderRadius: 12, fontSize: 11, color: "#94a3b8" },
-  toggleBtn: { background: "transparent", border: "1px solid #334155", color: "#94a3b8", borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer" },
-  pageBtn: { background: "#1e293b", border: "1px solid #334155", color: "#f1f5f9", borderRadius: 4, padding: "2px 6px", fontSize: 11, cursor: "pointer" },
-  emptyMsg: { padding: 20, textAlign: "center", color: "#94a3b8", fontSize: 12 },
-  errorMsg: { padding: 20, textAlign: "center", color: "#f87171", fontSize: 12 },
+  container: { background: "rgba(10, 15, 26, 0.98)", borderTop: "1px solid rgba(255, 255, 255, 0.08)", color: "#f1f5f9", fontFamily: "Inter, sans-serif", backdropFilter: "blur(16px)" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderBottom: "1px solid rgba(255, 255, 255, 0.06)" },
+  metaPill: { background: "rgba(255, 0, 113, 0.12)", border: "1px solid rgba(255, 0, 113, 0.3)", padding: "3px 10px", borderRadius: 12, fontSize: 11, color: "#ff85be", fontWeight: 600 },
+  toggleBtn: { background: "rgba(255, 255, 255, 0.05)", border: "1px solid rgba(255, 255, 255, 0.1)", color: "#94a3b8", borderRadius: 6, padding: "3px 10px", fontSize: 11, cursor: "pointer", transition: "all 0.15s" },
+  pageBtn: { background: "rgba(255, 255, 255, 0.06)", border: "1px solid rgba(255, 255, 255, 0.12)", color: "#f1f5f9", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", transition: "all 0.15s" },
+  emptyMsg: { padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 12 },
+  errorMsg: { padding: 24, textAlign: "center", color: "#f87171", fontSize: 12 },
   table: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
-  th: { position: "sticky", top: 0, background: "#1e293b", padding: "6px 10px", textAlign: "left", borderBottom: "2px solid #334155", zIndex: 10 },
-  td: { padding: "6px 10px", borderBottom: "1px solid #1e293b", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWIdth: 200 },
-  trEven: { background: "#0f172a" },
-  trOdd: { background: "#182234" },
-  badge: { fontSize: 9, fontWeight: 700, color: "#fff", borderRadius: 3, padding: "1px 4px" },
-  statsBtn: { background: "transparent", border: "none", color: "#38bdf8", fontSize: 10, cursor: "pointer", padding: 0, marginTop: 2 },
-  statsDrawer: { position: "absolute", top: "100%", left: 0, width: 160, background: "#1e293b", border: "1px solid #475569", borderRadius: 6, padding: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.5)", zIndex: 100, textAlign: "left" }
+  th: { position: "sticky", top: 0, background: "rgba(17, 24, 39, 0.98)", padding: "8px 12px", textAlign: "left", borderBottom: "1px solid rgba(255, 255, 255, 0.1)", zIndex: 10 },
+  td: { padding: "7px 12px", borderBottom: "1px solid rgba(255, 255, 255, 0.04)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 200, color: "#cbd5e1" },
+  trEven: { background: "transparent" },
+  trOdd: { background: "rgba(255, 255, 255, 0.02)" },
+  badge: { fontSize: 9, fontWeight: 700, color: "#fff", borderRadius: 4, padding: "2px 6px" },
+  statsBtn: { background: "transparent", border: "none", color: "#ff85be", fontSize: 10.5, cursor: "pointer", padding: 0, marginTop: 2, fontWeight: 600 },
+  statsDrawer: { position: "absolute", top: "100%", left: 0, width: 170, background: "rgba(17, 24, 39, 0.98)", border: "1px solid rgba(255, 0, 113, 0.3)", borderRadius: 8, padding: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 100, textAlign: "left", backdropFilter: "blur(16px)" }
 };
+
 
 const lightStyles = {
   container: { background: "#fff", borderTop: "1px solid #e2e8f0", color: "#0f172a", fontFamily: "Inter, sans-serif" },

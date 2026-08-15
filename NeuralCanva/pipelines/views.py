@@ -67,3 +67,19 @@ class GraphExecuteView(APIView):
         execute_graph.delay(graph.id)  # fire async
 
         return Response({'message': 'Execution started', 'graph_id': graph.id})
+
+
+class GraphStopView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        pipeline = get_object_or_404(Pipeline, pk=pk, owner=request.user)
+        graph = get_object_or_404(Graph, pipeline=pipeline)
+
+        graph.status = 'idle'
+        graph.save()
+
+        from .task import broadcast
+        broadcast(graph.pipeline_id, "Execution stopped by user.", stage="stopped", percent=0)
+
+        return Response({'message': 'Execution paused/stopped', 'graph_id': graph.id, 'status': 'idle'})

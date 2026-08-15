@@ -170,10 +170,12 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
                   cursor: "pointer",
                   background:
                     params[field.name] ?? field.default
-                      ? "#2563eb"
-                      : "#475569",
+                      ? "#ff0071"
+                      : "#334155",
                   position: "relative",
-                  transition: "background 0.15s",
+                  transition: "background 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+                  boxShadow: (params[field.name] ?? field.default) ? "0 0 12px rgba(255, 0, 113, 0.5)" : "none",
+
                 }}
               >
                 <span
@@ -202,18 +204,21 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
 
 const inputStyle = (c) => ({
   width: "100%",
-  padding: "8px 10px",
+  padding: "9px 12px",
   borderRadius: 8,
-  border: `1px solid ${c.border}`,
-  background: c.inputBg,
-  color: c.text,
-  fontSize: 13,
+  border: `1px solid rgba(255, 255, 255, 0.1)`,
+  background: "rgba(10, 15, 26, 0.9)",
+  color: "#f1f5f9",
+  fontSize: 12.5,
+  outline: "none",
+  fontFamily: "'Inter', sans-serif",
+  transition: "all 0.18s ease",
 });
 
 const darkColors = {
   label: "#94a3b8",
-  border: "#334155",
-  inputBg: "#0f172a",
+  border: "rgba(255, 255, 255, 0.1)",
+  inputBg: "rgba(10, 15, 26, 0.9)",
   text: "#f1f5f9",
 };
 
@@ -222,4 +227,4 @@ const lightColors = {
   border: "#cbd5e1",
   inputBg: "#fff",
   text: "#1e293b",
-};
+};

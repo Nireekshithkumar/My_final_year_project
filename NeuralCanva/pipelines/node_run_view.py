@@ -6,6 +6,8 @@ from accounts.authentication import CsrfExemptSessionAuthentication
 from .models import Graph
 from .task import broadcast, FASTAPI_URL
 from .preprocessing_helpers import run_split_dataset, run_encoder_node
+from .json_helpers import clean_for_json
+
 
 
 class NodeRunView(APIView):
@@ -61,6 +63,42 @@ class NodeRunView(APIView):
                 df = pd.read_csv(dataset.file.path)
                 result = {"dataframe": df.to_dict(orient='list'), "columns": list(df.columns), "column_types": dataset.column_types}
 
+            elif node_type in ('start', 'end'):
+                result = dict(input_data)
+                broadcast(graph.pipeline_id, f"Executed {node_type.title()} block.", stage=node_type)
+
+            elif node_type in ('Describe', 'DescribeStats'):
+                from .preprocessing_helpers import run_describe_node
+                result = run_describe_node(input_data, target_node['data'].get('params', {}))
+                broadcast(graph.pipeline_id, f"Summary statistics computed across {len(result.get('columns', []))} columns.", stage="Describe")
+
+            elif node_type == 'Correlation':
+                from .preprocessing_helpers import run_correlation_node
+                result = run_correlation_node(input_data, target_node['data'].get('params', {}))
+                broadcast(graph.pipeline_id, f"Correlation matrix calculated for numeric features.", stage="Correlation")
+
+            elif node_type == 'MissingValues':
+                from .preprocessing_helpers import run_missing_values_node
+                result = run_missing_values_node(input_data, target_node['data'].get('params', {}))
+                broadcast(graph.pipeline_id, f"Missing values analyzed ({result.get('total_missing_before', 0)} total missing).", stage="MissingValues")
+
+            elif node_type == 'Histogram':
+                from .preprocessing_helpers import run_histogram_node
+                result = run_histogram_node(input_data, target_node['data'].get('params', {}))
+                broadcast(graph.pipeline_id, f"Histogram distribution computed for {result.get('histogram', {}).get('column')}.", stage="Histogram")
+
+            elif node_type in ('Boxplot', 'plot'):
+                from .preprocessing_helpers import run_boxplot_node
+                result = run_boxplot_node(input_data, target_node['data'].get('params', {}))
+                broadcast(graph.pipeline_id, f"Boxplot distribution & outliers computed for {result.get('boxplot', {}).get('column')}.", stage="Boxplot")
+
+            elif node_type == 'evaluate':
+                from .preprocessing_helpers import run_evaluate_node
+                result = run_evaluate_node(input_data, target_node['data'].get('params', {}))
+                m = result.get('metrics', {})
+                score_str = f"Accuracy: {m.get('accuracy')}" if m.get('task_type') == 'classification' else f"R²: {m.get('r2')}, RMSE: {m.get('rmse')}"
+                broadcast(graph.pipeline_id, f"Evaluation score — {score_str}", stage="evaluate")
+
             elif node_type == 'Encoder':
                 params = target_node['data'].get('params', {})
                 result, before_cols, after_cols = run_encoder_node(input_data, params)
@@ -92,6 +130,7 @@ class NodeRunView(APIView):
                     json.dump(feature_cols, f)
                 
                 broadcast(graph.pipeline_id, f"Single Run: Split dataset on '{params.get('target_column')}' — train: {train_len} rows, test: {test_len} rows", stage=node_type)
+
 
             else:
                 payload = {
@@ -140,12 +179,13 @@ class NodeRunView(APIView):
                     with open(f'media/artifacts/{graph.id}/features.json', 'w') as f:
                         json.dump(result['columns'], f)
 
-            node_outputs[node_id] = result
-            graph.node_outputs = node_outputs
+            cleaned_result = clean_for_json(result)
+            node_outputs[node_id] = cleaned_result
+            graph.node_outputs = clean_for_json(node_outputs)
             graph.save()
 
             broadcast(graph.pipeline_id, f"Single Node Run Completed: {target_node['data'].get('title', node_id)}", stage="node_success")
-            return JsonResponse({"status": "success", "result": result})
+            return JsonResponse({"status": "success", "result": cleaned_result})
 
         except Exception as e:
             broadcast(graph.pipeline_id, f"Single Node Failed: {str(e)}", stage="node_error")

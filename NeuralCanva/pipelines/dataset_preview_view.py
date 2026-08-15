@@ -140,7 +140,7 @@ class DatasetPreviewView(APIView):
 
         rows = sliced_df.to_dict(orient='records')
 
-        return JsonResponse({
+        response_data = {
             "node_id": target_node_id,
             "page": page,
             "page_size": page_size,
@@ -150,4 +150,16 @@ class DatasetPreviewView(APIView):
             "column_types": column_types,
             "column_stats": column_stats,
             "rows": rows,
-        })
+        }
+
+        # Forward any rich model / EDA / evaluation artifacts
+        for key in [
+            "metrics", "plots", "confusion_matrix", "classification_report",
+            "accuracy", "f1", "precision", "recall", "r2", "rmse", "mse", "mae",
+            "null_summary", "histogram", "boxplot", "correlation_matrix", "explained_variance_ratio"
+        ]:
+            if key in output_data:
+                response_data[key] = output_data[key]
+
+        return JsonResponse(response_data)
+

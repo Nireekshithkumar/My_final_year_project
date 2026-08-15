@@ -20,6 +20,8 @@ from .preprocessing_helpers import (
     apply_preprocess_step,
     topological_sort
 )
+from .json_helpers import clean_for_json
+
 
 
 def broadcast(pipeline_id, message, stage=None, percent=None):
@@ -121,6 +123,56 @@ def execute_graph(self, graph_id):
                 )
                 continue
 
+            if node_type in ('Describe', 'DescribeStats'):
+                from .preprocessing_helpers import run_describe_node
+                result = run_describe_node(input_data, node['data'].get('params', {}))
+                node_outputs[node_id] = result
+                percent_after = int(((i + 1) / total_nodes) * 100)
+                broadcast(graph.pipeline_id, f"Summary statistics computed for {len(result.get('columns', []))} columns", stage="Describe", percent=percent_after)
+                continue
+
+            if node_type == 'Correlation':
+                from .preprocessing_helpers import run_correlation_node
+                result = run_correlation_node(input_data, node['data'].get('params', {}))
+                node_outputs[node_id] = result
+                percent_after = int(((i + 1) / total_nodes) * 100)
+                broadcast(graph.pipeline_id, f"Correlation matrix calculated for numeric columns", stage="Correlation", percent=percent_after)
+                continue
+
+            if node_type == 'MissingValues':
+                from .preprocessing_helpers import run_missing_values_node
+                result = run_missing_values_node(input_data, node['data'].get('params', {}))
+                node_outputs[node_id] = result
+                percent_after = int(((i + 1) / total_nodes) * 100)
+                broadcast(graph.pipeline_id, f"Missing values analyzed ({result.get('total_missing_before', 0)} nulls detected)", stage="MissingValues", percent=percent_after)
+                continue
+
+            if node_type == 'Histogram':
+                from .preprocessing_helpers import run_histogram_node
+                result = run_histogram_node(input_data, node['data'].get('params', {}))
+                node_outputs[node_id] = result
+                percent_after = int(((i + 1) / total_nodes) * 100)
+                broadcast(graph.pipeline_id, f"Histogram distribution computed for {result.get('histogram', {}).get('column')}", stage="Histogram", percent=percent_after)
+                continue
+
+            if node_type in ('Boxplot', 'plot'):
+                from .preprocessing_helpers import run_boxplot_node
+                result = run_boxplot_node(input_data, node['data'].get('params', {}))
+                node_outputs[node_id] = result
+                percent_after = int(((i + 1) / total_nodes) * 100)
+                broadcast(graph.pipeline_id, f"Boxplot outlier bounds computed for {result.get('boxplot', {}).get('column')}", stage="Boxplot", percent=percent_after)
+                continue
+
+            if node_type == 'evaluate':
+                from .preprocessing_helpers import run_evaluate_node
+                result = run_evaluate_node(input_data, node['data'].get('params', {}))
+                node_outputs[node_id] = result
+                percent_after = int(((i + 1) / total_nodes) * 100)
+                m = result.get('metrics', {})
+                score_str = f"Accuracy: {m.get('accuracy')}" if m.get('task_type') == 'classification' else f"R²: {m.get('r2')}, RMSE: {m.get('rmse')}"
+                broadcast(graph.pipeline_id, f"Evaluation score — {score_str}", stage="evaluate", percent=percent_after)
+                continue
+
             if node_type == 'splitDataset':
                 params = node['data'].get('params', {})
                 result, dropped_rows, train_len, test_len, feature_cols = run_split_dataset(input_data, params)
@@ -140,6 +192,7 @@ def execute_graph(self, graph_id):
                     stage=node_type, percent=percent_after
                 )
                 continue
+
 
             if node_type == 'predict':
                 mode = node['data'].get('params', {}).get('mode', 'test_split')
@@ -270,8 +323,8 @@ def execute_graph(self, graph_id):
         set_cached_result(user_id, nodes, edges, final_output)
 
         graph.status = 'success'
-        graph.result = final_output
-        graph.node_outputs = node_outputs
+        graph.result = clean_for_json(final_output)
+        graph.node_outputs = clean_for_json(node_outputs)
         graph.elapsed_seconds = elapsed
         graph.save()
 
