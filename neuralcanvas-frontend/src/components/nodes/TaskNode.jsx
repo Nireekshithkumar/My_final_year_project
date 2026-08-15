@@ -9,8 +9,17 @@ const STATUS_MAP = {
   waiting_for_dependency: { label: "Waiting…", bg: "rgba(249,115,22,0.15)", color: "#fdba74", border: "rgba(249,115,22,0.35)" },
 };
 
-export default function TaskNode({ id, data, selected }) {
-  const { icon, iconColor = "#ff0071", title, subtitle, outputs = [], nodeType, lastPrediction, status = "ready" } = data;
+export default function TaskNode({ id, data = {}, selected }) {
+  const {
+    icon = "⚙️",
+    iconColor = "#ff0071",
+    title = "Node",
+    subtitle = "",
+    outputs = [],
+    nodeType = "",
+    lastPrediction,
+    status = "ready",
+  } = data || {};
   const { setNodes, setEdges } = useReactFlow();
 
   const handleDelete = (e) => {
@@ -19,11 +28,21 @@ export default function TaskNode({ id, data, selected }) {
     setEdges((eds) => eds.filter((e) => e.source !== id && e.target !== id));
   };
 
-  const handleDownload = (e) => { e.stopPropagation(); data.onDownload?.(id, data.params); };
-  const handlePredict = (e) => { e.stopPropagation(); data.onPredict?.(id); };
-  const handleRunNode = (e) => { e.stopPropagation(); data.onRunNode?.(id); };
+  const handleDownload = (e) => {
+    e.stopPropagation();
+    data?.onDownload?.(id, data?.params);
+  };
+  const handlePredict = (e) => {
+    e.stopPropagation();
+    data?.onPredict?.(id);
+  };
+  const handleRunNode = (e) => {
+    e.stopPropagation();
+    data?.onRunNode?.(id);
+  };
 
   const sb = STATUS_MAP[status] || STATUS_MAP.ready;
+
 
   return (
     <div style={{

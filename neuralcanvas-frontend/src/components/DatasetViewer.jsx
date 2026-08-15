@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import api from "../api/axios";
 
 const TYPE_BADGES = {
@@ -9,14 +9,19 @@ const TYPE_BADGES = {
   datetime: { bg: "#ec4899", label: "DATE" },
 };
 
-export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refreshTrigger }) {
+export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refreshTrigger, height = 230, onHeightChange }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [isMaximized, setIsMaximized] = useState(false);
   const [loading, setLoading] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [error, setError] = useState("");
   const [notRunYet, setNotRunYet] = useState(false);
   const [page, setPage] = useState(1);
   const [expandedCol, setExpandedCol] = useState(null);
+
+  const isDraggingRef = useRef(false);
+  const startYRef = useRef(0);
+  const startHeightRef = useRef(height);
 
   useEffect(() => {
     if (!pipelineId) return;
@@ -36,7 +41,6 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
         const status = err.response?.status;
         const detail = err.response?.data?.detail || "";
         if (status === 404) {
-          // Node exists but hasn't produced output yet — not an error
           setNotRunYet(true);
         } else {
           setError(detail || "No dataset output available for this node.");
@@ -49,146 +53,258 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
     fetchPreview();
   }, [pipelineId, selectedNodeId, page, refreshTrigger]);
 
-  const c = isDark ? darkStyles : lightStyles;
+  // Mouse drag resizing handler
+  const handleMouseDown = (e) => {
+    isDraggingRef.current = true;
+    startYRef.current = e.clientY;
+    startHeightRef.current = height;
+    document.body.style.cursor = "row-resize";
+    document.body.style.userSelect = "none";
 
-  if (collapsed) {
-    return (
-      <div style={{ ...c.container, height: 36, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 16px" }}>
-        <span style={{ fontSize: 12, fontWeight: 600 }}>📊 Dataset Preview & Statistics Panel</span>
-        <button onClick={() => setCollapsed(false)} style={c.toggleBtn}>▲ Expand Panel</button>
-      </div>
-    );
-  }
+    const onMouseMove = (moveEvent) => {
+      if (!isDraggingRef.current) return;
+      const deltaY = startYRef.current - moveEvent.clientY;
+      const newHeight = Math.min(Math.max(startHeightRef.current + deltaY, 120), window.innerHeight * 0.75);
+      if (onHeightChange) onHeightChange(newHeight);
+    };
+
+    const onMouseUp = () => {
+      isDraggingRef.current = false;
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+    };
+
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+  };
+
+  const columns = previewData?.columns || [];
+  const rows = previewData?.rows || [];
+  const columnTypes = previewData?.column_types || {};
+  const columnStats = previewData?.column_stats || {};
+  const totalRows = previewData?.total_rows || 0;
+  const totalColumns = previewData?.total_columns || 0;
+  const totalPages = Math.ceil(totalRows / 30) || 1;
+
+  const currentHeight = isMaximized ? "75vh" : collapsed ? 38 : `${height}px`;
 
   return (
-    <div style={{ ...c.container, height: 260, display: "flex", flexDirection: "column" }}>
-      {/* Header */}
-      <div style={c.header}>
+    <div
+      style={{
+        height: currentHeight,
+        background: "rgba(10, 15, 26, 0.98)",
+        borderTop: "1px solid rgba(255, 255, 255, 0.1)",
+        display: "flex",
+        flexDirection: "column",
+        zIndex: 20,
+        backdropFilter: "blur(20px)",
+        position: "relative",
+        transition: isDraggingRef.current ? "none" : "height 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+      }}
+    >
+      {/* Resizer Handle Bar */}
+      {!collapsed && (
+        <div
+          onMouseDown={handleMouseDown}
+          style={{
+            position: "absolute",
+            top: -4,
+            left: 0,
+            right: 0,
+            height: 8,
+            cursor: "row-resize",
+            zIndex: 30,
+            display: "flex",
+            justifyContent: "center",
+            alignItems: "center",
+          }}
+          title="Drag to resize bottom panel height"
+        >
+          <div
+            style={{
+              width: 48,
+              height: 3,
+              borderRadius: 2,
+              background: "rgba(255, 255, 255, 0.2)",
+              transition: "background 0.2s",
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "#ff0071")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "rgba(255, 255, 255, 0.2)")}
+          />
+        </div>
+      )}
+
+      {/* Top Header Bar */}
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          padding: "6px 16px",
+          borderBottom: collapsed ? "none" : "1px solid rgba(255, 255, 255, 0.08)",
+          background: "rgba(17, 24, 39, 0.8)",
+          fontSize: 12,
+          flexShrink: 0,
+        }}
+      >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>📊 Dataset Viewer</span>
-          {previewData && (
-            <span style={c.metaPill}>
-              {previewData.total_rows} rows × {previewData.total_columns} columns | Node: {previewData.node_id}
+          <span style={{ fontWeight: 700, color: "#f8fafc", display: "flex", alignItems: "center", gap: 6 }}>
+            📊 {selectedNodeId ? `Node Preview (${selectedNodeId})` : "Dataset Table"}
+          </span>
+          {totalRows > 0 && !collapsed && (
+            <span style={{ fontSize: 11, color: "#94a3b8" }}>
+              {totalRows} rows • {totalColumns} columns
             </span>
           )}
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-          {previewData && (
-            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-              <button disabled={page <= 1} onClick={() => setPage((p) => p - 1)} style={c.pageBtn}>◀</button>
-              <span style={{ fontSize: 11 }}>Page {previewData.page} of {Math.ceil(previewData.total_rows / previewData.page_size) || 1}</span>
-              <button disabled={page >= Math.ceil(previewData.total_rows / previewData.page_size)} onClick={() => setPage((p) => p + 1)} style={c.pageBtn}>▶</button>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {totalPages > 1 && !collapsed && (
+            <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#94a3b8" }}>
+              <button
+                disabled={page <= 1}
+                onClick={() => setPage((p) => p - 1)}
+                style={paginationBtnStyle(page <= 1)}
+              >
+                ◀ Prev
+              </button>
+              <span>{page} / {totalPages}</span>
+              <button
+                disabled={page >= totalPages}
+                onClick={() => setPage((p) => p + 1)}
+                style={paginationBtnStyle(page >= totalPages)}
+              >
+                Next ▶
+              </button>
             </div>
           )}
-          <button onClick={() => setCollapsed(true)} style={c.toggleBtn}>▼ Collapse</button>
+
+          <button
+            onClick={() => setIsMaximized(!isMaximized)}
+            style={actionBtnStyle}
+            title={isMaximized ? "Restore size" : "Maximize panel"}
+          >
+            {isMaximized ? "❐ Restore" : "⛶ Maximize"}
+          </button>
+
+          <button
+            onClick={() => {
+              setCollapsed(!collapsed);
+              if (isMaximized) setIsMaximized(false);
+            }}
+            style={actionBtnStyle}
+          >
+            {collapsed ? "▲ Expand" : "▼ Collapse"}
+          </button>
         </div>
       </div>
 
-      {/* Main Table Content */}
-      <div style={{ flex: 1, overflow: "auto", padding: "0 12px 12px 12px" }}>
-        {loading && <div style={c.emptyMsg}>Loading dataset slice…</div>}
-        {!loading && notRunYet && (
-          <div style={{ ...c.emptyMsg, color: '#f59e0b', fontSize: 12 }}>
-            ⏳ This node hasn't been executed yet. Run the pipeline or Quick Run this node to see its output.
-          </div>
-        )}
-        {!loading && !notRunYet && error && <div style={c.errorMsg}>{error}</div>}
+      {/* Table Body Content */}
+      {!collapsed && (
+        <div style={{ flex: 1, overflow: "auto", position: "relative" }}>
+          {loading && (
+            <div style={{ padding: 40, textAlign: "center", color: "#94a3b8" }}>
+              <div style={{ fontSize: 24, marginBottom: 8 }}>⏳</div>
+              Loading dataset preview…
+            </div>
+          )}
 
+          {!loading && notRunYet && (
+            <div style={{ padding: 36, textAlign: "center", color: "#64748b" }}>
+              <div style={{ fontSize: 28, marginBottom: 8 }}>⚡</div>
+              <div style={{ fontSize: 13, color: "#94a3b8", fontWeight: 600 }}>This block has not been executed yet.</div>
+              <p style={{ fontSize: 11.5, color: "#475569", marginTop: 4 }}>
+                Click ▶ Run on the node or ▶ Run Full Pipeline on the top toolbar to generate outputs.
+              </p>
+            </div>
+          )}
 
-        {!loading && !error && previewData && (
-          <table style={c.table}>
-            <thead>
-              <tr>
-                <th style={{ ...c.th, width: 40 }}>#</th>
-                {previewData.columns.map((col) => {
-                  const type = previewData.column_types[col] || "numerical";
-                  const badge = TYPE_BADGES[type] || TYPE_BADGES.numerical;
-                  const isExpanded = expandedCol === col;
-                  const stats = previewData.column_stats[col] || {};
+          {!loading && error && !notRunYet && (
+            <div style={{ padding: 30, textAlign: "center", color: "#fca5a5" }}>
+              ⚠ {error}
+            </div>
+          )}
 
-                  return (
-                    <th key={col} style={c.th}>
-                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
-                        <span style={{ fontWeight: 600 }}>{col}</span>
-                        <span style={{ ...c.badge, background: badge.bg }}>{badge.label}</span>
-                      </div>
-                      <button onClick={() => setExpandedCol(isExpanded ? null : col)} style={c.statsBtn}>
-                        {isExpanded ? "Hide Stats ▲" : "Stats ▼"}
-                      </button>
+          {!loading && !notRunYet && !error && rows.length === 0 && (
+            <div style={{ padding: 30, textAlign: "center", color: "#64748b" }}>
+              No tabular data rows available.
+            </div>
+          )}
 
-                      {/* Expandable Column Statistics Drawer */}
-                      {isExpanded && (
-                        <div style={c.statsDrawer}>
-                          <div style={{ fontWeight: 700, marginBottom: 4, borderBottom: `1px solid ${isDark ? '#475569' : '#cbd5e1'}`, paddingBottom: 2 }}>
-                            Stats: {col}
-                          </div>
-                          {Object.entries(stats).map(([k, v]) => (
-                            <div key={k} style={{ display: "flex", justifyContent: "space-between", fontSize: 10, margin: "2px 0" }}>
-                              <span style={{ opacity: 0.8 }}>{k}:</span>
-                              <span style={{ fontWeight: 600 }}>{String(v)}</span>
-                            </div>
-                          ))}
+          {!loading && !notRunYet && !error && rows.length > 0 && (
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: 11.5,
+                textAlign: "left",
+                fontFamily: "'JetBrains Mono', monospace",
+              }}
+            >
+              <thead>
+                <tr style={{ background: "#0e1524", position: "sticky", top: 0, zIndex: 10, borderBottom: "1px solid rgba(255, 255, 255, 0.1)" }}>
+                  <th style={{ padding: "8px 10px", width: 40, color: "#64748b" }}>#</th>
+                  {columns.map((col) => {
+                    const badge = TYPE_BADGES[columnTypes[col]] || { bg: "#475569", label: "TXT" };
+                    return (
+                      <th key={col} style={{ padding: "8px 12px", borderLeft: "1px solid rgba(255, 255, 255, 0.05)", whiteSpace: "nowrap" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                          <span style={{ fontWeight: 700, color: "#f1f5f9" }}>{col}</span>
+                          <span style={{ fontSize: 9, fontWeight: 700, background: badge.bg, color: "#fff", padding: "1px 5px", borderRadius: 3 }}>
+                            {badge.label}
+                          </span>
                         </div>
-                      )}
-                    </th>
-                  );
-                })}
-              </tr>
-            </thead>
-            <tbody>
-              {previewData.rows.map((row, idx) => (
-                <tr key={idx} style={idx % 2 === 0 ? c.trEven : c.trOdd}>
-                  <td style={{ ...c.td, color: isDark ? "#64748b" : "#94a3b8", fontSize: 10 }}>
-                    {(previewData.page - 1) * previewData.page_size + idx + 1}
-                  </td>
-                  {previewData.columns.map((col) => (
-                    <td key={col} style={c.td}>
-                      {row[col] !== null && row[col] !== undefined ? String(row[col]) : <em style={{ opacity: 0.4 }}>NaN</em>}
-                    </td>
-                  ))}
+                      </th>
+                    );
+                  })}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </div>
+              </thead>
+              <tbody>
+                {rows.map((row, rIdx) => (
+                  <tr
+                    key={rIdx}
+                    style={{
+                      borderBottom: "1px solid rgba(255, 255, 255, 0.04)",
+                      background: rIdx % 2 === 0 ? "transparent" : "rgba(255, 255, 255, 0.015)",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.background = "rgba(255, 0, 113, 0.05)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = rIdx % 2 === 0 ? "transparent" : "rgba(255, 255, 255, 0.015)")}
+                  >
+                    <td style={{ padding: "6px 10px", color: "#64748b" }}>{(page - 1) * 30 + rIdx + 1}</td>
+                    {columns.map((col) => (
+                      <td key={col} style={{ padding: "6px 12px", borderLeft: "1px solid rgba(255, 255, 255, 0.04)", color: "#cbd5e1", whiteSpace: "nowrap" }}>
+                        {row[col] !== null && row[col] !== undefined ? String(row[col]) : <span style={{ color: "#64748b", fontStyle: "italic" }}>null</span>}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
-const darkStyles = {
-  container: { background: "rgba(10, 15, 26, 0.98)", borderTop: "1px solid rgba(255, 255, 255, 0.08)", color: "#f1f5f9", fontFamily: "Inter, sans-serif", backdropFilter: "blur(16px)" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 18px", borderBottom: "1px solid rgba(255, 255, 255, 0.06)" },
-  metaPill: { background: "rgba(255, 0, 113, 0.12)", border: "1px solid rgba(255, 0, 113, 0.3)", padding: "3px 10px", borderRadius: 12, fontSize: 11, color: "#ff85be", fontWeight: 600 },
-  toggleBtn: { background: "rgba(255, 255, 255, 0.05)", border: "1px solid rgba(255, 255, 255, 0.1)", color: "#94a3b8", borderRadius: 6, padding: "3px 10px", fontSize: 11, cursor: "pointer", transition: "all 0.15s" },
-  pageBtn: { background: "rgba(255, 255, 255, 0.06)", border: "1px solid rgba(255, 255, 255, 0.12)", color: "#f1f5f9", borderRadius: 6, padding: "3px 8px", fontSize: 11, cursor: "pointer", transition: "all 0.15s" },
-  emptyMsg: { padding: 24, textAlign: "center", color: "#94a3b8", fontSize: 12 },
-  errorMsg: { padding: 24, textAlign: "center", color: "#f87171", fontSize: 12 },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
-  th: { position: "sticky", top: 0, background: "rgba(17, 24, 39, 0.98)", padding: "8px 12px", textAlign: "left", borderBottom: "1px solid rgba(255, 255, 255, 0.1)", zIndex: 10 },
-  td: { padding: "7px 12px", borderBottom: "1px solid rgba(255, 255, 255, 0.04)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 200, color: "#cbd5e1" },
-  trEven: { background: "transparent" },
-  trOdd: { background: "rgba(255, 255, 255, 0.02)" },
-  badge: { fontSize: 9, fontWeight: 700, color: "#fff", borderRadius: 4, padding: "2px 6px" },
-  statsBtn: { background: "transparent", border: "none", color: "#ff85be", fontSize: 10.5, cursor: "pointer", padding: 0, marginTop: 2, fontWeight: 600 },
-  statsDrawer: { position: "absolute", top: "100%", left: 0, width: 170, background: "rgba(17, 24, 39, 0.98)", border: "1px solid rgba(255, 0, 113, 0.3)", borderRadius: 8, padding: 10, boxShadow: "0 8px 24px rgba(0,0,0,0.6)", zIndex: 100, textAlign: "left", backdropFilter: "blur(16px)" }
-};
+const paginationBtnStyle = (disabled) => ({
+  background: "rgba(255, 255, 255, 0.05)",
+  border: "1px solid rgba(255, 255, 255, 0.1)",
+  color: disabled ? "#475569" : "#cbd5e1",
+  padding: "3px 8px",
+  borderRadius: 4,
+  fontSize: 10.5,
+  cursor: disabled ? "not-allowed" : "pointer",
+});
 
-
-const lightStyles = {
-  container: { background: "#fff", borderTop: "1px solid #e2e8f0", color: "#0f172a", fontFamily: "Inter, sans-serif" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "8px 16px", borderBottom: "1px solid #f1f5f9" },
-  metaPill: { background: "#f1f5f9", padding: "2px 8px", borderRadius: 12, fontSize: 11, color: "#475569" },
-  toggleBtn: { background: "transparent", border: "1px solid #cbd5e1", color: "#475569", borderRadius: 4, padding: "2px 8px", fontSize: 11, cursor: "pointer" },
-  pageBtn: { background: "#f8fafc", border: "1px solid #cbd5e1", color: "#0f172a", borderRadius: 4, padding: "2px 6px", fontSize: 11, cursor: "pointer" },
-  emptyMsg: { padding: 20, textAlign: "center", color: "#64748b", fontSize: 12 },
-  errorMsg: { padding: 20, textAlign: "center", color: "#dc2626", fontSize: 12 },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 12 },
-  th: { position: "sticky", top: 0, background: "#f8fafc", padding: "6px 10px", textAlign: "left", borderBottom: "2px solid #e2e8f0", zIndex: 10 },
-  td: { padding: "6px 10px", borderBottom: "1px solid #f1f5f9", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWIdth: 200 },
-  trEven: { background: "#fff" },
-  trOdd: { background: "#f8fafc" },
-  badge: { fontSize: 9, fontWeight: 700, color: "#fff", borderRadius: 3, padding: "1px 4px" },
-  statsBtn: { background: "transparent", border: "none", color: "#0284c7", fontSize: 10, cursor: "pointer", padding: 0, marginTop: 2 },
-  statsDrawer: { position: "absolute", top: "100%", left: 0, width: 160, background: "#fff", border: "1px solid #cbd5e1", borderRadius: 6, padding: 8, boxShadow: "0 4px 12px rgba(0,0,0,0.15)", zIndex: 100, textAlign: "left" }
+const actionBtnStyle = {
+  background: "rgba(255, 255, 255, 0.04)",
+  border: "1px solid rgba(255, 255, 255, 0.08)",
+  color: "#94a3b8",
+  padding: "3px 9px",
+  borderRadius: 5,
+  fontSize: 11,
+  cursor: "pointer",
 };

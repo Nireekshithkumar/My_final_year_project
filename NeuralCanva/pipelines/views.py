@@ -76,10 +76,14 @@ class GraphStopView(APIView):
         pipeline = get_object_or_404(Pipeline, pk=pk, owner=request.user)
         graph = get_object_or_404(Graph, pipeline=pipeline)
 
-        graph.status = 'idle'
+        action = request.data.get('action', 'pause')
+        new_status = 'paused' if action == 'pause' else 'idle'
+
+        graph.status = new_status
         graph.save()
 
         from .task import broadcast
-        broadcast(graph.pipeline_id, "Execution stopped by user.", stage="stopped", percent=0)
+        broadcast(graph.pipeline_id, f"Execution {new_status} by user.", stage=new_status, percent=None)
 
-        return Response({'message': 'Execution paused/stopped', 'graph_id': graph.id, 'status': 'idle'})
+        return Response({'message': f'Execution {new_status}', 'graph_id': graph.id, 'status': new_status})
+

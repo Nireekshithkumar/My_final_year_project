@@ -65,8 +65,9 @@ const SECTIONS = [
   },
 ];
 
-export default function NodePalette() {
+export default function NodePalette({ width } = {}) {
   const [search, setSearch] = useState("");
+
 
   const onDragStart = (e, item) => {
     e.dataTransfer.setData("application/reactflow-type", item.type);
@@ -89,15 +90,17 @@ export default function NodePalette() {
 
   return (
     <aside style={{
-      width: 220,
+      width: width !== undefined ? width : "100%",
+      minWidth: 160,
       background: "rgba(10, 15, 26, 0.95)",
       borderRight: "1px solid rgba(255, 255, 255, 0.08)",
-      padding: "16px 12px",
+      padding: "14px 10px",
       overflowY: "auto",
       height: "100%",
       backdropFilter: "blur(16px)",
       display: "flex",
       flexDirection: "column",
+      boxSizing: "border-box",
     }}>
       {/* Brand Header */}
       <div style={{ marginBottom: 12 }}>
