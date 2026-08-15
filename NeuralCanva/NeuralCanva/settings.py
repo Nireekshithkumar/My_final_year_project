@@ -27,17 +27,20 @@ SECRET_KEY = os.environ.get(
 DEBUG = os.environ.get("DEBUG", "True").lower() == "true"
 
 
-# Render hostname
-RENDER_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
+# ============================================================
+# ALLOWED HOSTS
+# ============================================================
 
+RENDER_HOSTNAME = os.environ.get("RENDER_EXTERNAL_HOSTNAME")
 
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "testserver",
+    "neuralcanvas-backend.onrender.com",
 ]
 
-if RENDER_HOSTNAME:
+if RENDER_HOSTNAME and RENDER_HOSTNAME not in ALLOWED_HOSTS:
     ALLOWED_HOSTS.append(RENDER_HOSTNAME)
 
 
@@ -146,7 +149,6 @@ if DATABASE_URL:
         )
     }
 else:
-    # Local development
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.sqlite3",
@@ -284,18 +286,13 @@ REST_FRAMEWORK = {
 # ============================================================
 
 CORS_ALLOWED_ORIGINS = [
+    # Local development
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+
+    # Production frontend
+    "https://neuralcanvasteam.vercel.app",
 ]
-
-VERCEL_FRONTEND_URL = os.environ.get(
-    "VERCEL_FRONTEND_URL"
-)
-
-if VERCEL_FRONTEND_URL:
-    CORS_ALLOWED_ORIGINS.append(
-        VERCEL_FRONTEND_URL
-    )
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -307,24 +304,35 @@ CORS_ALLOW_CREDENTIALS = True
 CSRF_COOKIE_HTTPONLY = False
 
 CSRF_TRUSTED_ORIGINS = [
+    # Local development
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-]
 
-if VERCEL_FRONTEND_URL:
-    CSRF_TRUSTED_ORIGINS.append(
-        VERCEL_FRONTEND_URL
-    )
+    # Production frontend
+    "https://neuralcanvasteam.vercel.app",
+]
 
 
 # ============================================================
-# AUTHENTICATION
+# AUTHENTICATION BACKENDS
 # ============================================================
 
 AUTHENTICATION_BACKENDS = [
     "accounts.backends.EmailBackend",
     "django.contrib.auth.backends.ModelBackend",
 ]
+
+
+# ============================================================
+# SESSION / COOKIE CONFIGURATION
+# ============================================================
+
+# Required because frontend and backend are on different domains.
+SESSION_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = True
+
+SESSION_COOKIE_SAMESITE = "None"
+CSRF_COOKIE_SAMESITE = "None"
 
 
 # ============================================================
@@ -353,10 +361,6 @@ if not DEBUG:
         "HTTP_X_FORWARDED_PROTO",
         "https",
     )
-
-    SESSION_COOKIE_SECURE = True
-
-    CSRF_COOKIE_SECURE = True
 
     SECURE_CONTENT_TYPE_NOSNIFF = True
 
