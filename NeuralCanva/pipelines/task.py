@@ -1,32 +1,28 @@
-from celery import shared_task
-from collections import deque
-import httpx
 import logging
-from .cache import get_cached_result, set_cached_result
+import httpx
 import time
-from channels.layers import get_channel_layer
-from asgiref.sync import async_to_sync
 import base64
 import os
 import json
 
 logger = logging.getLogger(__name__)
 
-
+from .cache import get_cached_result, set_cached_result
+from channels.layers import get_channel_layer
+from asgiref.sync import async_to_sync
 
 FASTAPI_URL = os.environ.get(
     "FASTAPI_URL",
-    "http://localhost:8001" 
+    "http://localhost:8001"
 )
 
 from .preprocessing_helpers import (
     run_split_dataset,
     run_encoder_node,
     apply_preprocess_step,
-    topological_sort
+    topological_sort,
 )
 from .json_helpers import clean_for_json
-
 
 
 def broadcast(pipeline_id, message, stage=None, percent=None):
@@ -34,12 +30,11 @@ def broadcast(pipeline_id, message, stage=None, percent=None):
     async_to_sync(channel_layer.group_send)(
         f'run_{pipeline_id}_logs',
         {'type': 'log_message', 'message': message,
-            'stage': stage, 'percent': percent}
+         'stage': stage, 'percent': percent}
     )
 
 
-@shared_task(bind=True)
-def execute_graph(self, graph_id):
+def execute_graph(graph_id):
     from .models import Graph
 
     graph = Graph.objects.select_related('pipeline__owner').get(id=graph_id)

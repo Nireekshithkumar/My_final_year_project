@@ -1,11 +1,15 @@
-from rest_framework import generics, permissions, status
+from concurrent.futures import ThreadPoolExecutor
+from rest_framework import generics, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from .models import Pipeline, Graph
 from .serializer import PipelineSerializer, GraphSerializer
-from .task import execute_graph
+from .task import execute_graph, broadcast
 from .cache import invalidate_graph_cache
+
+# Module-level executor — shared across requests so threads are reused.
+_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pipeline")
 
 
 
@@ -61,12 +65,23 @@ class GraphExecuteView(APIView):
         pipeline = get_object_or_404(Pipeline, pk=pk, owner=request.user)
         graph = get_object_or_404(Graph, pipeline=pipeline)
 
+        # Prevent duplicate execution
+        if graph.status == 'running':
+            return Response(
+                {'message': 'Pipeline is already running.',
+                 'graph_id': graph.id, 'status': 'running'},
+                status=409,
+            )
+
+        # Mark running before handing off to background thread
         graph.status = 'running'
-        graph.save()
+        graph.error = ''
+        graph.save(update_fields=['status', 'error'])
 
-        execute_graph.delay(graph.id)  # fire async
+        # Submit to thread pool — returns immediately
+        _executor.submit(execute_graph, graph.id)
 
-        return Response({'message': 'Execution started', 'graph_id': graph.id})
+        return Response({'message': 'Execution started', 'graph_id': graph.id, 'status': 'running'})
 
 
 class GraphStopView(APIView):
@@ -80,10 +95,11 @@ class GraphStopView(APIView):
         new_status = 'paused' if action == 'pause' else 'idle'
 
         graph.status = new_status
-        graph.save()
+        graph.save(update_fields=['status'])
 
-        from .task import broadcast
-        broadcast(graph.pipeline_id, f"Execution {new_status} by user.", stage=new_status, percent=None)
+        broadcast(graph.pipeline_id, f"Execution {new_status} by user.",
+                  stage=new_status, percent=None)
 
-        return Response({'message': f'Execution {new_status}', 'graph_id': graph.id, 'status': new_status})
+        return Response({'message': f'Execution {new_status}',
+                         'graph_id': graph.id, 'status': new_status})
 
