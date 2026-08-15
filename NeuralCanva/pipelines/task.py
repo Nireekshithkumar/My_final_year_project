@@ -12,7 +12,12 @@ import json
 
 logger = logging.getLogger(__name__)
 
-FASTAPI_URL = "http://localhost:8001"
+
+
+FASTAPI_URL = os.environ.get(
+    "FASTAPI_URL",
+    "http://localhost:8001" 
+)
 
 from .preprocessing_helpers import (
     run_split_dataset,
