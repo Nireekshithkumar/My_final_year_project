@@ -5,6 +5,8 @@ from rest_framework.permissions import IsAuthenticated
 from accounts.authentication import CsrfExemptSessionAuthentication
 from .models import Graph
 from .task import broadcast, FASTAPI_URL
+from .preprocessing_helpers import run_split_dataset, run_encoder_node
+
 
 class NodeRunView(APIView):
     authentication_classes = [CsrfExemptSessionAuthentication]
@@ -60,49 +62,36 @@ class NodeRunView(APIView):
                 result = {"dataframe": df.to_dict(orient='list'), "columns": list(df.columns), "column_types": dataset.column_types}
 
             elif node_type == 'Encoder':
-                import pandas as pd
-                from sklearn.preprocessing import LabelEncoder, OrdinalEncoder
-                df = pd.DataFrame(input_data.get('dataframe', {}))
                 params = target_node['data'].get('params', {})
-                method = params.get('method', 'OneHot')
-                features = params.get('features', [])
-                before_cols = len(df.columns)
-
-                if method == 'OneHot':
-                    df = pd.get_dummies(df, columns=features, drop_first=False)
-                elif method == 'Label':
-                    for col in features:
-                        if col in df.columns:
-                            df[col] = LabelEncoder().fit_transform(df[col].astype(str))
-                elif method == 'Ordinal':
-                    valid_feats = [f for f in features if f in df.columns]
-                    if valid_feats:
-                        enc = OrdinalEncoder()
-                        df[valid_feats] = enc.fit_transform(df[valid_feats].astype(str))
-                elif method == 'Target':
-                    target_col = params.get('target_column')
-                    if target_col and target_col in df.columns:
-                        for col in features:
-                            if col in df.columns:
-                                df[col] = df.groupby(col)[target_col].transform('mean')
-
-                after_cols = len(df.columns)
-                result = {"dataframe": df.to_dict(orient='list'), "columns": list(df.columns)}
-                broadcast(graph.pipeline_id, f"Single Run: {method} encoding — columns: {before_cols} → {after_cols}", stage=node_type)
+                result, before_cols, after_cols = run_encoder_node(input_data, params)
+                
+                # Save params to artifact using node_id
+                path = f'media/artifacts/{graph.id}/{node_id}.json'
+                import json, os
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'w') as f:
+                    json.dump(result['encoder_params'], f)
+                
+                # Save latest columns to features.json
+                with open(f'media/artifacts/{graph.id}/features.json', 'w') as f:
+                    json.dump(result.get('columns', []), f)
+                
+                broadcast(graph.pipeline_id, f"Single Run: {params.get('method', 'OneHot')} encoding — columns: {before_cols} → {after_cols}", stage=node_type)
 
             elif node_type == 'splitDataset':
-                import pandas as pd
-                df = pd.DataFrame(input_data.get('dataframe', {}))
-                target_column = target_node['data'].get('params', {}).get('target_column')
-                if not target_column or target_column not in df.columns:
-                    return JsonResponse({"detail": f"Target column '{target_column}' missing from dataset."}, status=400)
-                df = df.dropna()
-                feature_df = df.drop(columns=[target_column])
-                numeric_cols = feature_df.select_dtypes(include=['number']).columns.tolist()
-                X = feature_df[numeric_cols].values.tolist()
-                y = df[target_column].values.tolist()
-                result = {"X": X, "y": y, "columns": numeric_cols}
-                broadcast(graph.pipeline_id, f"Single Run: Split dataset on '{target_column}'", stage=node_type)
+                params = target_node['data'].get('params', {})
+                result, dropped_rows, train_len, test_len, feature_cols = run_split_dataset(input_data, params)
+                
+                if dropped_rows > 0:
+                    broadcast(graph.pipeline_id, f"Warning: Removed {dropped_rows} rows containing missing/NaN values.", stage="warning")
+                
+                # Save latest columns to features.json
+                import os, json
+                os.makedirs(f'media/artifacts/{graph.id}', exist_ok=True)
+                with open(f'media/artifacts/{graph.id}/features.json', 'w') as f:
+                    json.dump(feature_cols, f)
+                
+                broadcast(graph.pipeline_id, f"Single Run: Split dataset on '{params.get('target_column')}' — train: {train_len} rows, test: {test_len} rows", stage=node_type)
 
             else:
                 payload = {
@@ -113,6 +102,43 @@ class NodeRunView(APIView):
                 resp = httpx.post(f"{FASTAPI_URL}/execute", json=payload, timeout=60)
                 resp.raise_for_status()
                 result = resp.json()['result']
+
+                # Save artifacts if they exist in result
+                if 'model_b64' in result:
+                    ext = 'h5' if node_type in ['DenseNN', 'CNN', 'RNN', 'LSTM', 'GRU', 'Autoencoder'] else 'pkl'
+                    path = f'media/artifacts/{graph.id}/model.{ext}'
+                    import os, base64
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, 'wb') as f:
+                        f.write(base64.b64decode(result['model_b64']))
+
+                if 'scaler_params' in result:
+                    path = f'media/artifacts/{graph.id}/{node_id}.json'
+                    import os, json
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, 'w') as f:
+                        json.dump(result['scaler_params'], f)
+
+                if 'vectorizer_params' in result:
+                    path = f'media/artifacts/{graph.id}/{node_id}.json'
+                    import os, json
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, 'w') as f:
+                        json.dump(result['vectorizer_params'], f)
+
+                if 'encoder_params' in result:
+                    path = f'media/artifacts/{graph.id}/{node_id}.json'
+                    import os, json
+                    os.makedirs(os.path.dirname(path), exist_ok=True)
+                    with open(path, 'w') as f:
+                        json.dump(result['encoder_params'], f)
+
+                # Save latest columns to features.json
+                if 'columns' in result:
+                    import os, json
+                    os.makedirs(f'media/artifacts/{graph.id}', exist_ok=True)
+                    with open(f'media/artifacts/{graph.id}/features.json', 'w') as f:
+                        json.dump(result['columns'], f)
 
             node_outputs[node_id] = result
             graph.node_outputs = node_outputs

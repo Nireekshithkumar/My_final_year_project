@@ -14,31 +14,12 @@ logger = logging.getLogger(__name__)
 
 FASTAPI_URL = "http://localhost:8001"
 
-
-def topological_sort(nodes, edges):
-    node_ids = [n['id'] for n in nodes]
-    in_degree = {nid: 0 for nid in node_ids}
-    adjacency = {nid: [] for nid in node_ids}
-
-    for edge in edges:
-        adjacency[edge['source']].append(edge['target'])
-        in_degree[edge['target']] += 1
-
-    queue = deque([nid for nid in node_ids if in_degree[nid] == 0])
-    order = []
-
-    while queue:
-        node = queue.popleft()
-        order.append(node)
-        for neighbour in adjacency[node]:
-            in_degree[neighbour] -= 1
-            if in_degree[neighbour] == 0:
-                queue.append(neighbour)
-
-    if len(order) != len(node_ids):
-        raise ValueError("Graph has a cycle.")
-
-    return order
+from .preprocessing_helpers import (
+    run_split_dataset,
+    run_encoder_node,
+    apply_preprocess_step,
+    topological_sort
+)
 
 
 def broadcast(pipeline_id, message, stage=None, percent=None):
@@ -119,68 +100,45 @@ def execute_graph(self, graph_id):
                 continue
 
             if node_type == 'Encoder':
-                import pandas as pd
-                from sklearn.preprocessing import OneHotEncoder, LabelEncoder, OrdinalEncoder
-            
-                df = pd.DataFrame(input_data['dataframe'])
-                method = node['data'].get('params', {}).get('method', 'OneHot')
-                features = node['data'].get('params', {}).get('features', [])
-            
-                before_cols = len(df.columns)
-            
-                if method == 'OneHot':
-                    df = pd.get_dummies(df, columns=features, drop_first=False)
-                elif method == 'Label':
-                    for col in features:
-                        if col in df.columns:
-                            df[col] = LabelEncoder().fit_transform(df[col].astype(str))
-                elif method == 'Ordinal':
-                    valid_feats = [f for f in features if f in df.columns]
-                    if valid_feats:
-                        enc = OrdinalEncoder()
-                        df[valid_feats] = enc.fit_transform(df[valid_feats].astype(str))
-                elif method == 'Target':
-                    target_col = node['data'].get('params', {}).get('target_column')
-                    if not target_col and 'target_column' in parent_ids:
-                        target_col = parent_ids['target_column']
-                    if target_col and target_col in df.columns:
-                        for col in features:
-                            if col in df.columns:
-                                means = df.groupby(col)[target_col].transform('mean')
-                                df[col] = means
-            
-                after_cols = len(df.columns)
-                node_outputs[node_id] = {"dataframe": df.to_dict(orient='list'), "columns": list(df.columns)}
+                params = node['data'].get('params', {})
+                result, before_cols, after_cols = run_encoder_node(input_data, params)
+                
+                # Save params to artifact using node_id
+                path = f'media/artifacts/{graph_id}/{node_id}.json'
+                with open(path, 'w') as f:
+                    json.dump(result['encoder_params'], f)
+                
+                # Save latest column names list to features.json
+                with open(f'media/artifacts/{graph_id}/features.json', 'w') as f:
+                    json.dump(result.get('columns', []), f)
+                
+                node_outputs[node_id] = result
                 percent_after = int(((i + 1) / total_nodes) * 100)
                 broadcast(
                     graph.pipeline_id,
-                    f"{method} encoding on {', '.join(features)} — columns: {before_cols} → {after_cols}",
+                    f"One-Hot encoding completed. Features: {', '.join(params.get('features', []))}. Columns: {before_cols} → {after_cols}",
                     stage=node_type, percent=percent_after
                 )
                 continue
 
             if node_type == 'splitDataset':
-                import pandas as pd
-                parent_output = input_data
-                df = pd.DataFrame(parent_output['dataframe'])
-                target_column = node['data'].get('params', {}).get('target_column')
-                if not target_column or target_column not in df.columns:
-                    raise ValueError(f"Target column '{target_column}' not found in dataset columns: {list(df.columns)}")
-
-                initial_rows = len(df)
-                df = df.dropna()
-                dropped_rows = initial_rows - len(df)
+                params = node['data'].get('params', {})
+                result, dropped_rows, train_len, test_len, feature_cols = run_split_dataset(input_data, params)
+                
                 if dropped_rows > 0:
                     broadcast(graph.pipeline_id, f"Warning: Removed {dropped_rows} rows containing missing/NaN values.", stage="warning")
-
-                feature_df = df.drop(columns=[target_column])
-                numeric_cols = feature_df.select_dtypes(include=['number']).columns.tolist()
-                X = feature_df[numeric_cols].values.tolist()
-                y = df[target_column].values.tolist()
-            
-                node_outputs[node_id] = {"X": X, "y": y, "columns": numeric_cols}
+                
+                # Save latest column names list to features.json
+                with open(f'media/artifacts/{graph_id}/features.json', 'w') as f:
+                    json.dump(feature_cols, f)
+                
+                node_outputs[node_id] = result
                 percent_after = int(((i + 1) / total_nodes) * 100)
-                broadcast(graph.pipeline_id, f"Split dataset on '{target_column}' — features: {len(numeric_cols)}", stage=node_type, percent=percent_after)
+                broadcast(
+                    graph.pipeline_id,
+                    f"Split dataset on '{params.get('target_column')}' — train: {train_len} rows, test: {test_len} rows",
+                    stage=node_type, percent=percent_after
+                )
                 continue
 
             if node_type == 'predict':
@@ -206,9 +164,40 @@ def execute_graph(self, graph_id):
             
                 model_path = model_files[0]
                 feature_values = node['data'].get('params', {}).get('feature_values', {})
-                feature_columns = input_data.get('columns', list(feature_values.keys()))
-                values = [float(feature_values.get(col, 0)) for col in feature_columns]
-            
+                
+                # Load final features list to check order
+                features_path = f'{artifact_dir}/features.json'
+                if os.path.exists(features_path):
+                    with open(features_path) as f:
+                        final_cols = json.load(f)
+                else:
+                    final_cols = list(feature_values.keys())
+                
+                # Check for feature count mismatch (robustness check!)
+                if len(feature_values) != len(final_cols):
+                    raise ValueError(f"Feature count mismatch: model expects {len(final_cols)} features, but {len(feature_values)} provided.")
+                
+                # Preprocess step-by-step
+                current_features = dict(feature_values)
+                
+                # Trace topological order to find preprocess nodes
+                exec_order = topological_sort(nodes, edges)
+                node_map = {n['id']: n for n in nodes}
+                
+                for nid in exec_order:
+                    if nid == node_id:
+                        break
+                    n = node_map[nid]
+                    ntype = n['data'].get('nodeType')
+                    ap_path = f'{artifact_dir}/{nid}.json'
+                    if os.path.exists(ap_path):
+                        with open(ap_path) as f:
+                            ap = json.load(f)
+                        current_features = apply_preprocess_step(ntype, ap, current_features)
+                
+                # Order values by final_cols
+                values = [float(current_features.get(col, 0.0)) for col in final_cols]
+                
                 if model_path.endswith('.pkl'):
                     with open(model_path, 'rb') as f:
                         model = pickle.load(f)
@@ -216,21 +205,11 @@ def execute_graph(self, graph_id):
                     from tensorflow import keras
                     model = keras.models.load_model(model_path)
             
-                scaler_files = glob.glob(f'{artifact_dir}/*.json')
-                X_input = [values]
-                for sf in scaler_files:
-                    with open(sf) as f:
-                        sp = json.load(f)
-                    if 'mean' in sp and sp['mean']:
-                        X_input = [[(v - m) / s if s != 0 else 0 for v, m, s in zip(values, sp['mean'], sp['scale'])]]
-                    elif 'data_min' in sp and sp['data_min']:
-                        X_input = [[(v - mn) / (mx - mn) if mx != mn else 0 for v, mn, mx in zip(values, sp['data_min'], sp['data_max'])]]
-            
                 import numpy as np
-                prediction = model.predict(np.array(X_input))
+                prediction = model.predict(np.array([values]))
                 pred_value = prediction.tolist()[0] if hasattr(prediction, 'tolist') else prediction[0]
             
-                node_outputs[node_id] = {"prediction": pred_value, "input": dict(zip(feature_columns, values))}
+                node_outputs[node_id] = {"prediction": pred_value, "input": dict(zip(final_cols, values))}
                 percent_after = int(((i + 1) / total_nodes) * 100)
                 broadcast(graph.pipeline_id, f"Prediction: {pred_value}", stage="predict", percent=percent_after)
                 continue
@@ -260,9 +239,25 @@ def execute_graph(self, graph_id):
                     f.write(base64.b64decode(result['model_b64']))
 
             if 'scaler_params' in result:
-                path = f'media/artifacts/{graph_id}/{node_type}.json'
+                path = f'media/artifacts/{graph_id}/{node_id}.json'
                 with open(path, 'w') as f:
                     json.dump(result['scaler_params'], f)
+
+            if 'vectorizer_params' in result:
+                path = f'media/artifacts/{graph_id}/{node_id}.json'
+                with open(path, 'w') as f:
+                    json.dump(result['vectorizer_params'], f)
+
+            if 'encoder_params' in result:
+                path = f'media/artifacts/{graph_id}/{node_id}.json'
+                with open(path, 'w') as f:
+                    json.dump(result['encoder_params'], f)
+
+            # Save latest column names list to features.json
+            if 'columns' in result:
+                with open(f'media/artifacts/{graph_id}/features.json', 'w') as f:
+                    json.dump(result['columns'], f)
+
 
             percent_after = int(((i + 1) / total_nodes) * 100)
             broadcast(

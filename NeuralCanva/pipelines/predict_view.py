@@ -7,6 +7,9 @@ from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from accounts.authentication import CsrfExemptSessionAuthentication
 from .models import Graph
+from .preprocessing_helpers import topological_sort, apply_preprocess_step
+import os
+
 
 
 class PredictView(APIView):
@@ -23,32 +26,58 @@ class PredictView(APIView):
 
         model_path = model_files[0]
         feature_values = request.data.get('feature_values', {})
-        columns = list(feature_values.keys())
-        values = [float(feature_values[c]) for c in columns]
-
+        
+        # Load final features list to check order
+        features_path = f'{artifact_dir}/features.json'
+        if os.path.exists(features_path):
+            with open(features_path) as f:
+                final_cols = json.load(f)
+        else:
+            final_cols = list(feature_values.keys())
+        
+        # Check for feature count mismatch (robustness check!)
+        if len(feature_values) != len(final_cols):
+            return JsonResponse({
+                "error": f"Feature count mismatch: model expects {len(final_cols)} features, but {len(feature_values)} provided."
+            }, status=400)
+            
+        # Preprocess step-by-step
+        current_features = dict(feature_values)
+        
+        # Trace topological order to find preprocess nodes
+        nodes = graph.nodes or []
+        edges = graph.edges or []
+        
+        try:
+            exec_order = topological_sort(nodes, edges)
+        except Exception as e:
+            return JsonResponse({"error": f"Graph sorting failed: {str(e)}"}, status=400)
+            
+        node_map = {n['id']: n for n in nodes}
+        
+        for nid in exec_order:
+            n = node_map[nid]
+            ntype = n['data'].get('nodeType')
+            ap_path = f'{artifact_dir}/{nid}.json'
+            if os.path.exists(ap_path):
+                with open(ap_path) as f:
+                    ap = json.load(f)
+                current_features = apply_preprocess_step(ntype, ap, current_features)
+                
+        # Order values by final_cols
+        try:
+            values = [float(current_features.get(col, 0.0)) for col in final_cols]
+        except (ValueError, TypeError) as e:
+            return JsonResponse({"error": f"Non-numeric preprocessed feature found: {str(e)}"}, status=400)
+            
         if model_path.endswith('.pkl'):
             with open(model_path, 'rb') as f:
                 model = pickle.load(f)
-            expected_n = getattr(model, 'n_features_in_', None)
-            if expected_n is not None and len(values) != expected_n:
-                return JsonResponse({
-                    "error": f"Feature count mismatch: model expects {expected_n} features, but {len(values)} provided."
-                }, status=400)
         else:
             from tensorflow import keras
             model = keras.models.load_model(model_path)
-
-        X_input = [values]
-        scaler_files = glob.glob(f'{artifact_dir}/*.json')
-        for sf in scaler_files:
-            with open(sf) as f:
-                sp = json.load(f)
-            if 'mean' in sp and sp['mean']:
-                X_input = [[(v - m) / s if s != 0 else 0 for v, m, s in zip(values, sp['mean'], sp['scale'])]]
-            elif 'data_min' in sp and sp['data_min']:
-                X_input = [[(v - mn) / (mx - mn) if mx != mn else 0 for v, mn, mx in zip(values, sp['data_min'], sp['data_max'])]]
-
-        prediction = model.predict(np.array(X_input))
+            
+        prediction = model.predict(np.array([values]))
         pred_value = prediction.tolist()[0] if hasattr(prediction, 'tolist') else prediction[0]
-
+        
         return JsonResponse({"prediction": pred_value})

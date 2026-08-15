@@ -32,19 +32,42 @@ class DatasetPreviewView(APIView):
         df = None
         if "dataframe" in output_data:
             df = pd.DataFrame(output_data["dataframe"])
+
+        elif "X_train" in output_data and "X_test" in output_data:
+            # Split-format output — show train + test combined, labelled
+            cols = output_data.get("columns", [f"feat_{i}" for i in range(len(output_data["X_train"][0]) if output_data["X_train"] else 0)])
+            train_df = pd.DataFrame(output_data["X_train"], columns=cols)
+            train_df["_split"] = "train"
+            if output_data.get("y_train"):
+                train_df["target"] = output_data["y_train"]
+
+            test_df = pd.DataFrame(output_data["X_test"], columns=cols)
+            test_df["_split"] = "test"
+            if output_data.get("y_test"):
+                test_df["target"] = output_data["y_test"]
+
+            df = pd.concat([train_df, test_df], ignore_index=True)
+
         elif "X" in output_data:
             cols = output_data.get("columns", [f"feat_{i}" for i in range(len(output_data["X"][0]) if output_data["X"] else 0)])
             df = pd.DataFrame(output_data["X"], columns=cols)
             if "y" in output_data and output_data["y"]:
                 df["target"] = output_data["y"]
+
         elif "transformed" in output_data:
             cols = [f"component_{i+1}" for i in range(len(output_data["transformed"][0]) if output_data["transformed"] else 0)]
             df = pd.DataFrame(output_data["transformed"], columns=cols)
+
         elif "predictions" in output_data:
-            df = pd.DataFrame({
-                "predictions": output_data.get("predictions", []),
-                "actual": output_data.get("actual", output_data.get("y_test", []))
-            })
+            preds = output_data.get("predictions", [])
+            actual = output_data.get("actual", output_data.get("y_test", []))
+            # Guard: truncate to the shorter of the two to avoid length mismatch
+            min_len = min(len(preds), len(actual)) if actual else len(preds)
+            row_data = {"predictions": preds[:min_len]}
+            if actual:
+                row_data["actual"] = actual[:min_len]
+            df = pd.DataFrame(row_data)
+
 
         if df is None or df.empty:
             return JsonResponse({"detail": "Node output does not contain previewable tabular data."}, status=400)

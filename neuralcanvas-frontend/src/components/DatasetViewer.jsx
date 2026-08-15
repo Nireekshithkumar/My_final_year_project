@@ -14,6 +14,7 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
   const [loading, setLoading] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [error, setError] = useState("");
+  const [notRunYet, setNotRunYet] = useState(false);
   const [page, setPage] = useState(1);
   const [expandedCol, setExpandedCol] = useState(null);
 
@@ -23,6 +24,7 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
     const fetchPreview = async () => {
       setLoading(true);
       setError("");
+      setNotRunYet(false);
       try {
         const url = selectedNodeId
           ? `/pipelines/${pipelineId}/nodes/${selectedNodeId}/preview/?page=${page}&page_size=30`
@@ -30,8 +32,15 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
         const { data } = await api.get(url);
         setPreviewData(data);
       } catch (err) {
-        setError(err.response?.data?.detail || "No dataset output available for this node.");
         setPreviewData(null);
+        const status = err.response?.status;
+        const detail = err.response?.data?.detail || "";
+        if (status === 404) {
+          // Node exists but hasn't produced output yet — not an error
+          setNotRunYet(true);
+        } else {
+          setError(detail || "No dataset output available for this node.");
+        }
       } finally {
         setLoading(false);
       }
@@ -78,7 +87,13 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
       {/* Main Table Content */}
       <div style={{ flex: 1, overflow: "auto", padding: "0 12px 12px 12px" }}>
         {loading && <div style={c.emptyMsg}>Loading dataset slice…</div>}
-        {error && <div style={c.errorMsg}>{error}</div>}
+        {!loading && notRunYet && (
+          <div style={{ ...c.emptyMsg, color: '#f59e0b', fontSize: 12 }}>
+            ⏳ This node hasn't been executed yet. Run the pipeline or Quick Run this node to see its output.
+          </div>
+        )}
+        {!loading && !notRunYet && error && <div style={c.errorMsg}>{error}</div>}
+
 
         {!loading && !error && previewData && (
           <table style={c.table}>

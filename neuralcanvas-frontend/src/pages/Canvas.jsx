@@ -53,30 +53,38 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     )
   }, [setNodes])
 
-  const getUpstreamColumns = useCallback((nodeId) => {
+  const getUpstreamColumns = useCallback((nodeId, visited = new Set()) => {
+    if (visited.has(nodeId)) return []
+    visited.add(nodeId)
     const parentEdge = edges.find((e) => e.target === nodeId)
     if (!parentEdge) return []
     const parentNode = nodes.find((n) => n.id === parentEdge.source)
     if (!parentNode) return []
 
     if (parentNode.data?.nodeType === 'splitDataset') {
-      const allCols = getUpstreamColumns(parentNode.id)
+      const allCols = getUpstreamColumns(parentNode.id, visited)
       const target = parentNode.data.params?.target_column
-      return allCols.filter((c) => c !== target)
+      return target ? allCols.filter((c) => c !== target) : allCols
     }
 
-    if (parentNode.data?.columns) return parentNode.data.columns
-    return getUpstreamColumns(parentNode.id)
+    // Use stored columns if available (set after a run)
+    if (parentNode.data?.columns?.length > 0) return parentNode.data.columns
+    // Otherwise keep walking up
+    return getUpstreamColumns(parentNode.id, visited)
   }, [edges, nodes])
 
-  const getUpstreamColumnTypes = useCallback((nodeId) => {
+  const getUpstreamColumnTypes = useCallback((nodeId, visited = new Set()) => {
+    if (visited.has(nodeId)) return {}
+    visited.add(nodeId)
     const parentEdge = edges.find((e) => e.target === nodeId)
     if (!parentEdge) return {}
     const parentNode = nodes.find((n) => n.id === parentEdge.source)
     if (!parentNode) return {}
-    if (parentNode.data?.columnTypes) return parentNode.data.columnTypes
-    return getUpstreamColumnTypes(parentNode.id)
+    if (parentNode.data?.columnTypes && Object.keys(parentNode.data.columnTypes).length > 0)
+      return parentNode.data.columnTypes
+    return getUpstreamColumnTypes(parentNode.id, visited)
   }, [edges, nodes])
+
 
   const handlePredict = useCallback(async (nodeId) => {
     const node = nodes.find((n) => n.id === nodeId)
@@ -97,8 +105,16 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     updateNodeData(nodeId, { status: 'running' })
     setError('')
     try {
-      await api.post(`/pipelines/${pipelineId}/nodes/${nodeId}/run/`)
-      updateNodeData(nodeId, { status: 'success' })
+      const { data } = await api.post(`/pipelines/${pipelineId}/nodes/${nodeId}/run/`)
+      // Persist updated columns from run result so downstream dropdowns stay populated
+      const result = data?.result || {}
+      const newCols = Array.isArray(result.columns) && result.columns.length > 0
+        ? result.columns
+        : null
+      updateNodeData(nodeId, {
+        status: 'success',
+        ...(newCols ? { columns: newCols } : {}),
+      })
       setRefreshTrigger((t) => t + 1)
     } catch (err) {
       const msg = err.response?.data?.detail || 'Node execution failed.'
@@ -154,8 +170,35 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
     [onStatusChange, screenToFlowPosition, setNodes, handlePredict, handleRunNode]
   )
 
+  // Client-side DAG cycle detection (DFS) — mirrors backend logic
+  const hasCycle = useCallback((nodeList, edgeList) => {
+    const adj = {}
+    nodeList.forEach(n => { adj[n.id] = [] })
+    edgeList.forEach(e => { if (adj[e.source]) adj[e.source].push(e.target) })
+    const WHITE = 0, GREY = 1, BLACK = 2
+    const color = {}
+    nodeList.forEach(n => { color[n.id] = WHITE })
+    const dfs = (v) => {
+      color[v] = GREY
+      for (const w of (adj[v] || [])) {
+        if (color[w] === GREY) return true   // back-edge → cycle
+        if (color[w] === WHITE && dfs(w)) return true
+      }
+      color[v] = BLACK
+      return false
+    }
+    return nodeList.some(n => color[n.id] === WHITE && dfs(n.id))
+  }, [])
+
   const saveGraph = useCallback(async () => {
     if (!pipelineId) return
+
+    // Client-side cycle check before the network round-trip
+    if (hasCycle(nodes, edges)) {
+      onStatusChange('failed')
+      setError('⚠️ Your pipeline contains a cycle (loop). All connections must flow in one direction. Remove the circular link and try again.')
+      return
+    }
 
     try {
       onStatusChange('saving')
@@ -164,12 +207,23 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
       setError('')
     } catch (err) {
       onStatusChange('failed')
-      setError(err.response?.data?.detail || 'Unable to save the workflow.')
+      // Server may return non_field_errors (e.g. cycle detection) or detail
+      const serverMsg =
+        err.response?.data?.non_field_errors?.[0] ||
+        err.response?.data?.detail ||
+        'Unable to save the workflow.'
+      setError(serverMsg)
     }
-  }, [edges, nodes, onStatusChange, pipelineId])
+  }, [edges, hasCycle, nodes, onStatusChange, pipelineId])
 
   const runGraph = useCallback(async () => {
     if (!pipelineId) return
+
+    // Guard: must be a valid DAG before executing
+    if (hasCycle(nodes, edges)) {
+      setError('⚠️ Cannot run: pipeline contains a cycle. Fix the graph connections first.')
+      return
+    }
 
     try {
       setError('')
@@ -181,7 +235,7 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
       setError(err.response?.data?.detail || 'Unable to run the workflow.')
       setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'failed' } })))
     }
-  }, [onStatusChange, pipelineId, setNodes])
+  }, [edges, hasCycle, nodes, onStatusChange, pipelineId, setNodes])
 
   const clearGraph = useCallback(() => {
     setNodes([])
@@ -339,9 +393,19 @@ const FlowCanvas = forwardRef(function FlowCanvas({ pipelineId, onStatusChange, 
                     columns={
                       selectedNode.data.nodeType === 'Encoder'
                         ? Object.entries(getUpstreamColumnTypes(selectedNode.id))
-                          .filter(([, t]) => t === 'categorical' || t === 'text')
-                          .map(([name]) => name)
-                        : ['splitDataset', 'StandardScaler', 'MinMaxScaler', 'RobustScaler', 'MaxAbsScaler', 'Normalizer', 'predict'].includes(selectedNode.data.nodeType)
+                            .filter(([, t]) => t === 'categorical' || t === 'text')
+                            .map(([name]) => name)
+                        : [
+                            'splitDataset',
+                            'StandardScaler', 'MinMaxScaler', 'RobustScaler', 'MaxAbsScaler', 'Normalizer',
+                            'TfidfVectorizer', 'CountVectorizer', 'Embeddings',
+                            'HyperparamTuning',
+                            'RandomForestClassifier', 'GradientBoostingClassifier', 'ExtraTreesClassifier',
+                            'LogisticRegression', 'SVC', 'KNeighborsClassifier', 'DecisionTreeClassifier',
+                            'RandomForestRegressor', 'GradientBoostingRegressor', 'ExtraTreesRegressor',
+                            'LinearRegression', 'Ridge', 'Lasso', 'SVR', 'KNeighborsRegressor',
+                            'predict',
+                          ].includes(selectedNode.data.nodeType)
                           ? getUpstreamColumns(selectedNode.id)
                           : []
                     }
