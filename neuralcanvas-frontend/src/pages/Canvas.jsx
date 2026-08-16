@@ -561,8 +561,9 @@ const FlowCanvas = forwardRef(function FlowCanvas(
 
         const loadedNodes = (data.nodes || []).map((n) => {
           let extraData = {}
-          if (n.data?.nodeType === 'loadDataset' && n.data?.datasetId) {
-            const ds = datasetMap[String(n.data.datasetId)]
+          if (n.data?.nodeType === 'loadDataset') {
+            const dsId = n.data?.datasetId || n.data?.dataset_id
+            const ds = dsId ? datasetMap[String(dsId)] : null
             if (ds) {
               const dsColTypes = ds.column_types && Object.keys(ds.column_types).length > 0
                 ? ds.column_types : null
@@ -573,9 +574,17 @@ const FlowCanvas = forwardRef(function FlowCanvas(
               const nodeCols = Array.isArray(n.data.columns) && n.data.columns.length > 0
                 ? n.data.columns : null
               extraData = {
+                datasetId: String(ds.id),
+                dataset_id: String(ds.id),
+                filename: ds.name,
                 columns: dsCols || nodeCols || [],
                 columnTypes: dsColTypes || nodeColTypes || {},
                 subtitle: ds.name || n.data.subtitle,
+              }
+            } else if (dsId) {
+              extraData = {
+                datasetId: String(dsId),
+                dataset_id: String(dsId),
               }
             }
           }
@@ -997,7 +1006,9 @@ const FlowCanvas = forwardRef(function FlowCanvas(
                     <DatasetUpload
                       onUploaded={(dataset) =>
                         updateNodeData(selectedNode.id, {
-                          datasetId: dataset.id,
+                          datasetId: String(dataset.id),
+                          dataset_id: String(dataset.id),
+                          filename: dataset.name,
                           columns: dataset.columns,
                           columnTypes: dataset.column_types,
                           subtitle: dataset.name,

@@ -14,11 +14,13 @@ class DatasetUploadSerializer(serializers.ModelSerializer):
             **validated_data
         )
         try:
-            df = pd.read_csv(instance.file.path, nrows=500)
-            full_len = sum(1 for _ in open(instance.file.path)) - 1
-            instance.columns = list(df.columns)
-            instance.row_count = full_len
-            instance.column_types = self._detect_types(df)
+            with instance.file.open('rb') as f:
+                df = pd.read_csv(f, nrows=500)
+                instance.columns = list(df.columns)
+                instance.column_types = self._detect_types(df)
+            with instance.file.open('rb') as f:
+                full_len = sum(1 for _ in f) - 1
+                instance.row_count = max(0, full_len)
             instance.save(update_fields=['columns', 'row_count', 'column_types'])
         except Exception:
             pass

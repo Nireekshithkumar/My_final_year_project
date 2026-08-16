@@ -355,18 +355,60 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
     # 2. Dataset loading
     if node_type == 'loadDataset':
         from datasets.models import Dataset
-        dataset_id = node_data.get('datasetId')
+        dataset_id = (
+            node_data.get('datasetId')
+            or node_data.get('dataset_id')
+            or params.get('datasetId')
+            or params.get('dataset_id')
+        )
+
+        # If no explicit ID in node data, try matching by filename/subtitle if present
         if not dataset_id:
-            raise ValueError("No dataset selected for Load Dataset block. Attach or upload a CSV first.")
+            filename_hint = node_data.get('filename') or node_data.get('subtitle')
+            if filename_hint:
+                ds_match = Dataset.objects.filter(name=filename_hint).order_by('-uploaded_at').first()
+                if ds_match:
+                    dataset_id = ds_match.id
+
+        if not dataset_id:
+            raise ValueError(
+                "No dataset selected in the 'Load Dataset' block. "
+                "Please click the 'Load Dataset' block and select or upload a CSV file."
+            )
+
         try:
             dataset = Dataset.objects.get(id=dataset_id)
-        except Dataset.DoesNotExist:
-            raise ValueError(f"Dataset with ID '{dataset_id}' does not exist. Please re-upload or select a valid dataset.")
+        except (Dataset.DoesNotExist, Exception):
+            raise ValueError(
+                f"Dataset record '{dataset_id}' could not be found. "
+                "Please select or re-upload the dataset in the 'Load Dataset' block."
+            )
 
-        # Robust file path resolution across default_storage, direct path, MEDIA_ROOT, and BASE_DIR
-        file_path = None
-        candidates = []
+        storage_name = str(dataset.file.name) if dataset.file else 'None'
+        storage_backend = dataset.file.storage.__class__.__name__ if (dataset.file and hasattr(dataset.file, 'storage')) else 'Unknown'
+
+        logger.info(
+            f"[Load Dataset] ID: {dataset.id}, Filename: {dataset.name}, "
+            f"Storage Name: {storage_name}, Storage Backend: {storage_backend}"
+        )
+
+        df = None
+        # 1. Primary: Read directly via Django Storage API (supports local, Render Persistent Disk, S3, GCS, etc.)
         if dataset.file:
+            try:
+                with dataset.file.open('rb') as f:
+                    df = pd.read_csv(f)
+                logger.info(f"[Load Dataset] Successfully opened '{dataset.name}' via Storage API ({len(df)} rows, {len(df.columns)} cols).")
+            except (FileNotFoundError, ValueError, OSError) as e:
+                logger.warning(f"[Load Dataset] Direct storage open failed: {e}. Checking local filesystem fallback paths...")
+                df = None
+            except Exception as e:
+                logger.error(f"[Load Dataset] Unexpected error reading file through storage: {e}")
+                df = None
+
+        # 2. Secondary fallback: Local candidate paths (in case storage path prefix shifted)
+        if df is None and dataset.file:
+            candidates = []
             try:
                 from django.core.files.storage import default_storage
                 if hasattr(default_storage, 'path'):
@@ -374,6 +416,9 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
                         candidates.append(default_storage.path(dataset.file.name))
                     except Exception:
                         pass
+            except Exception:
+                pass
+            try:
                 candidates.append(dataset.file.path)
             except Exception:
                 pass
@@ -382,18 +427,22 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
             candidates.append(os.path.join(str(settings.BASE_DIR), 'media', raw_name))
             candidates.append(os.path.join(str(settings.BASE_DIR), raw_name))
 
-        for cp in candidates:
-            if cp and os.path.exists(cp):
-                file_path = cp
-                break
+            for cp in candidates:
+                if cp and os.path.exists(cp):
+                    try:
+                        df = pd.read_csv(cp)
+                        logger.info(f"[Load Dataset] Successfully opened '{dataset.name}' via candidate path.")
+                        break
+                    except Exception:
+                        pass
 
-        if not file_path:
+        if df is None:
             raise ValueError(
-                f"Dataset file '{dataset.name}' could not be found in configured storage. "
-                f"Please re-upload or select the dataset in the '{node_data.get('title', 'Load Dataset')}' block."
+                f"Dataset file '{dataset.name}' is missing from configured storage. "
+                "On Render free tier / ephemeral disk instances, uploaded files are cleared on service redeploy or restart. "
+                "Please re-upload or select the dataset in the 'Load Dataset' block to continue."
             )
 
-        df = pd.read_csv(file_path)
         result = {
             "dataframe": df.to_dict(orient='list'),
             "columns": list(df.columns),
