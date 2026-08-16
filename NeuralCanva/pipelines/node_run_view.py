@@ -61,6 +61,10 @@ class NodeRunView(APIView):
                     missing_dependencies.append(f"Required upstream block '{parent_title}' ({parent_id}) has not been executed yet.")
 
         if missing_dependencies:
+            if 'data' in target_node:
+                target_node['data']['status'] = 'failed'
+                graph.nodes = clean_for_json(nodes)
+                graph.save(update_fields=['nodes'])
             return JsonResponse({
                 "detail": f"Cannot run {target_title}. Missing output from required upstream blocks.",
                 "node_id": node_id,
@@ -87,7 +91,14 @@ class NodeRunView(APIView):
             cleaned_result = clean_for_json(result)
             node_outputs[node_id] = cleaned_result
             graph.node_outputs = clean_for_json(node_outputs)
-            graph.save(update_fields=['node_outputs'])
+
+            if 'data' in target_node:
+                target_node['data']['status'] = 'success'
+                if isinstance(result, dict) and 'columns' in result and result['columns']:
+                    target_node['data']['columns'] = result['columns']
+
+            graph.nodes = clean_for_json(nodes)
+            graph.save(update_fields=['nodes', 'node_outputs'])
 
             broadcast(graph.pipeline_id, broadcast_msg, stage=stage)
 
@@ -101,6 +112,10 @@ class NodeRunView(APIView):
         except ValueError as e:
             err_msg = str(e)
             logger.warning(f"Validation error in node {node_id} ({node_type}): {err_msg}")
+            if 'data' in target_node:
+                target_node['data']['status'] = 'failed'
+                graph.nodes = clean_for_json(nodes)
+                graph.save(update_fields=['nodes'])
             broadcast(graph.pipeline_id, f"Node {target_title} Error: {err_msg}", stage="node_error")
             return JsonResponse({
                 "detail": err_msg,
@@ -112,6 +127,10 @@ class NodeRunView(APIView):
         except Exception as e:
             err_msg = str(e)
             logger.error(f"Unexpected error executing node {node_id} ({node_type}): {err_msg}", exc_info=True)
+            if 'data' in target_node:
+                target_node['data']['status'] = 'failed'
+                graph.nodes = clean_for_json(nodes)
+                graph.save(update_fields=['nodes'])
             broadcast(graph.pipeline_id, f"Node {target_title} Error: {err_msg}", stage="node_error")
             return JsonResponse({
                 "detail": err_msg,

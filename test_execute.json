@@ -1,0 +1,10 @@
+﻿{
+  "algorithm_type": "LogisticRegression",
+  "params": {},
+  "input_data": {
+    "X_train": [[1,2],[2,3],[3,4],[4,5]],
+    "X_test": [[5,6]],
+    "y_train": [0,0,1,1],
+    "y_test": [1]
+  }
+}

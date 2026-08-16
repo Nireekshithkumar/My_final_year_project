@@ -3,9 +3,11 @@ import { Handle, Position, useReactFlow } from "reactflow";
 const STATUS_MAP = {
   not_run: { label: "Not Run", bg: "rgba(100,116,139,0.15)", color: "#94a3b8", border: "rgba(100,116,139,0.25)" },
   ready: { label: "Ready", bg: "rgba(255,0,113,0.12)", color: "#ff85be", border: "rgba(255,0,113,0.3)" },
+  pending: { label: "⏳ Pending", bg: "rgba(100,116,139,0.15)", color: "#94a3b8", border: "rgba(100,116,139,0.25)" },
   running: { label: "⏳ Running", bg: "rgba(255,0,113,0.25)", color: "#ffc2dd", border: "rgba(255,0,113,0.6)" },
   success: { label: "✓ Done", bg: "rgba(34,197,94,0.15)", color: "#86efac", border: "rgba(34,197,94,0.35)" },
   failed: { label: "✗ Failed", bg: "rgba(239,68,68,0.15)", color: "#fca5a5", border: "rgba(239,68,68,0.35)" },
+  skipped: { label: "⊘ Skipped", bg: "rgba(148,163,184,0.12)", color: "#94a3b8", border: "rgba(148,163,184,0.25)" },
   waiting_for_dependency: { label: "Waiting…", bg: "rgba(249,115,22,0.15)", color: "#fdba74", border: "rgba(249,115,22,0.35)" },
 };
 

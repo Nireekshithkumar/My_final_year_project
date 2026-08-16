@@ -73,14 +73,20 @@ def execute_graph(graph_id):
         # ── validate DAG and get execution order ──────
         execution_order = validate_and_sort_graph(nodes, edges)
 
+        # Reset all node statuses at run start: first node 'running', subsequent nodes 'pending'
+        node_map = {str(n.get('id')): n for n in nodes if isinstance(n, dict)}
+        for idx, nid in enumerate(execution_order):
+            if nid in node_map and 'data' in node_map[nid]:
+                node_map[nid]['data']['status'] = 'running' if idx == 0 else 'pending'
+
         graph.status = 'running'
+        graph.nodes = clean_for_json(nodes)
         graph.error = ''
-        graph.save(update_fields=['status', 'error'])
+        graph.save(update_fields=['status', 'nodes', 'error'])
 
         start_time = time.time()
         os.makedirs(f'media/artifacts/{graph_id}', exist_ok=True)
 
-        node_map = {str(n.get('id')): n for n in nodes if isinstance(n, dict)}
         node_outputs = {}
         total_nodes = len(execution_order)
 
@@ -91,7 +97,9 @@ def execute_graph(graph_id):
             percent=0
         )
 
+        current_executing_index = 0
         for i, node_id in enumerate(execution_order):
+            current_executing_index = i
             # Check if user requested stop/pause
             graph.refresh_from_db(fields=['status'])
             if graph.status in ('idle', 'paused'):
@@ -99,6 +107,12 @@ def execute_graph(graph_id):
                 return
 
             node = node_map[node_id]
+            # Mark current node as running
+            if 'data' in node:
+                node['data']['status'] = 'running'
+                graph.nodes = clean_for_json(nodes)
+                graph.save(update_fields=['nodes'])
+
             parent_ids = [str(e['source']) for e in edges if str(e.get('target')) == node_id]
             input_data = node_outputs.get(parent_ids[0]) if parent_ids else {}
 
@@ -125,6 +139,10 @@ def execute_graph(graph_id):
             save_node_artifacts(graph.id, node_id, artifacts)
 
             node_outputs[node_id] = result
+            if 'data' in node:
+                node['data']['status'] = 'success'
+                if isinstance(result, dict) and 'columns' in result and result['columns']:
+                    node['data']['columns'] = result['columns']
 
             percent_after = int(((i + 1) / total_nodes) * 100) if total_nodes else 100
             broadcast(graph.pipeline_id, f"{broadcast_msg} [{node_elapsed}s]", stage=stage, percent=percent_after)
@@ -136,12 +154,18 @@ def execute_graph(graph_id):
         if final_output is not None:
             set_cached_result(user_id, nodes, edges, final_output)
 
+        # Mark all executed nodes as success in final state
+        for nid in execution_order:
+            if nid in node_map and 'data' in node_map[nid]:
+                node_map[nid]['data']['status'] = 'success'
+
         graph.status = 'success'
+        graph.nodes = clean_for_json(nodes)
         graph.result = clean_for_json(final_output)
         graph.node_outputs = clean_for_json(node_outputs)
         graph.error = ''
         graph.elapsed_seconds = elapsed
-        graph.save(update_fields=['status', 'result', 'node_outputs', 'error', 'elapsed_seconds'])
+        graph.save(update_fields=['status', 'nodes', 'result', 'node_outputs', 'error', 'elapsed_seconds'])
 
         broadcast(
             graph.pipeline_id,
@@ -155,9 +179,26 @@ def execute_graph(graph_id):
         logger.error(f"Graph {graph_id} failed with Exception: {error_str}", exc_info=True)
         try:
             target_graph = Graph.objects.get(id=graph_id)
+            current_nodes = target_graph.nodes or nodes or []
+            curr_map = {str(n.get('id')): n for n in current_nodes if isinstance(n, dict)}
+
+            # Mark failing node as 'failed', and all downstream unexecuted nodes as 'skipped'
+            failing_node_id = execution_order[current_executing_index] if (execution_order and current_executing_index < len(execution_order)) else None
+            
+            for idx, nid in enumerate(execution_order):
+                if nid in curr_map and 'data' in curr_map[nid]:
+                    if nid == failing_node_id:
+                        curr_map[nid]['data']['status'] = 'failed'
+                    elif idx > current_executing_index:
+                        curr_map[nid]['data']['status'] = 'skipped'
+                    elif idx < current_executing_index and curr_map[nid]['data'].get('status') != 'failed':
+                        curr_map[nid]['data']['status'] = 'success'
+
             target_graph.status = 'failed'
+            target_graph.nodes = clean_for_json(current_nodes)
+            target_graph.node_outputs = clean_for_json(node_outputs)
             target_graph.error = error_str
-            target_graph.save(update_fields=['status', 'error'])
+            target_graph.save(update_fields=['status', 'nodes', 'node_outputs', 'error'])
             pid = target_graph.pipeline_id
         except Exception as db_err:
             logger.error(f"Failed to update graph status: {db_err}")

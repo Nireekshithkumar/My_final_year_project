@@ -453,7 +453,16 @@ const FlowCanvas = forwardRef(function FlowCanvas(
     try {
       setError('')
       onStatusChange('running')
-      setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'running' } })))
+      const startNode = nodes.find((n) => n.data?.nodeType === 'start') || nodes[0]
+      setNodes((nds) =>
+        nds.map((n) => ({
+          ...n,
+          data: {
+            ...n.data,
+            status: n.id === startNode?.id ? 'running' : 'pending',
+          },
+        }))
+      )
       if (setLogs) {
         setLogs((prev) => [
           ...prev,
@@ -645,6 +654,41 @@ const FlowCanvas = forwardRef(function FlowCanvas(
     loadGraph()
   }, [pipelineId, handlePredict, handleRunNode, setNodes, setEdges, setLogs, onStatusChange, setProgress])
 
+  // ── Helper to synchronize backend node statuses onto local ReactFlow nodes ─
+  const syncNodeStatusesFromBackend = useCallback(
+    (backendNodes) => {
+      if (!Array.isArray(backendNodes) || backendNodes.length === 0) return
+      const statusMap = new Map()
+      const colsMap = new Map()
+      for (const bn of backendNodes) {
+        if (bn && bn.id) {
+          statusMap.set(String(bn.id), bn.data?.status || 'ready')
+          if (bn.data?.columns) {
+            colsMap.set(String(bn.id), bn.data.columns)
+          }
+        }
+      }
+      setNodes((nds) =>
+        nds.map((n) => {
+          const bStatus = statusMap.get(String(n.id))
+          const bCols = colsMap.get(String(n.id))
+          if (bStatus || bCols) {
+            return {
+              ...n,
+              data: {
+                ...n.data,
+                ...(bStatus ? { status: bStatus } : {}),
+                ...(bCols ? { columns: bCols } : {}),
+              },
+            }
+          }
+          return n
+        })
+      )
+    },
+    [setNodes]
+  )
+
   // ── HTTP Polling fallback for pipeline status ──────────────────────────────
   // WebSockets on Render free-tier can silently disconnect. This effect polls
   // GET /pipelines/{id}/graph/ every 2 s while status === 'running' so the UI
@@ -661,10 +705,14 @@ const FlowCanvas = forwardRef(function FlowCanvas(
           clearInterval(intervalId)
           if (onStatusChange) onStatusChange('success')
           if (setProgress) setProgress(100)
-          // Mirror success onto all nodes
-          setNodes((nds) =>
-            nds.map((n) => ({ ...n, data: { ...n.data, status: 'success' } }))
-          )
+          // Synchronize granular node statuses from backend
+          if (Array.isArray(data?.nodes) && data.nodes.length > 0) {
+            syncNodeStatusesFromBackend(data.nodes)
+          } else {
+            setNodes((nds) =>
+              nds.map((n) => ({ ...n, data: { ...n.data, status: 'success' } }))
+            )
+          }
           if (setLogs) {
             setLogs((prev) => [
               ...prev,
@@ -680,12 +728,17 @@ const FlowCanvas = forwardRef(function FlowCanvas(
         } else if (polledStatus === 'failed') {
           clearInterval(intervalId)
           if (onStatusChange) onStatusChange('failed')
-          setNodes((nds) =>
-            nds.map((n) => ({
-              ...n,
-              data: { ...n.data, status: n.data.status === 'running' ? 'failed' : n.data.status },
-            }))
-          )
+          // Synchronize granular node statuses from backend (success, failed, skipped)
+          if (Array.isArray(data?.nodes) && data.nodes.length > 0) {
+            syncNodeStatusesFromBackend(data.nodes)
+          } else {
+            setNodes((nds) =>
+              nds.map((n) => ({
+                ...n,
+                data: { ...n.data, status: n.data.status === 'running' ? 'failed' : n.data.status },
+              }))
+            )
+          }
           if (setLogs) {
             setLogs((prev) => [
               ...prev,
@@ -697,14 +750,17 @@ const FlowCanvas = forwardRef(function FlowCanvas(
             ])
           }
         }
-        // While polledStatus === 'running', do nothing and keep polling.
+        // While polledStatus === 'running', synchronize in-flight node updates if available
+        else if (polledStatus === 'running' && Array.isArray(data?.nodes) && data.nodes.length > 0) {
+          syncNodeStatusesFromBackend(data.nodes)
+        }
       } catch {
         // Network error during poll — keep retrying until interval is cleared.
       }
     }, 2000)
 
     return () => clearInterval(intervalId)
-  }, [status, pipelineId, onStatusChange, setProgress, setNodes, setLogs])
+  }, [status, pipelineId, onStatusChange, setProgress, setNodes, setLogs, syncNodeStatusesFromBackend])
 
   // Left Panel Resize Drag Handle
   const handleLeftResize = (e) => {

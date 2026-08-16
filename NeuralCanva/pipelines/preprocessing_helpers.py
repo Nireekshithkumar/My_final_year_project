@@ -362,10 +362,31 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
         except Dataset.DoesNotExist:
             raise ValueError(f"Dataset with ID '{dataset_id}' does not exist. Please re-upload or select a valid dataset.")
 
-        if not os.path.exists(dataset.file.path):
-            raise ValueError(f"Dataset file '{dataset.name}' could not be found on disk.")
+        # Robust file path resolution across direct path, MEDIA_ROOT, and BASE_DIR
+        file_path = None
+        candidates = []
+        if dataset.file:
+            try:
+                candidates.append(dataset.file.path)
+            except Exception:
+                pass
+            raw_name = str(dataset.file.name)
+            candidates.append(os.path.join(str(settings.MEDIA_ROOT), raw_name))
+            candidates.append(os.path.join(str(settings.BASE_DIR), 'media', raw_name))
+            candidates.append(os.path.join(str(settings.BASE_DIR), raw_name))
 
-        df = pd.read_csv(dataset.file.path)
+        for cp in candidates:
+            if cp and os.path.exists(cp):
+                file_path = cp
+                break
+
+        if not file_path:
+            raise ValueError(
+                f"Dataset file '{dataset.name}' could not be found on disk (server filesystem was reset on deploy/restart). "
+                f"Please re-upload or re-attach the CSV dataset in the '{node_data.get('title', 'Load Dataset')}' block."
+            )
+
+        df = pd.read_csv(file_path)
         result = {
             "dataframe": df.to_dict(orient='list'),
             "columns": list(df.columns),
