@@ -8,6 +8,7 @@ import numpy as np
 from django.conf import settings
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, OneHotEncoder
+from .json_helpers import clean_for_json, sanitize_execution_data
 
 logger = logging.getLogger(__name__)
 
@@ -514,26 +515,63 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
         resp = _http_client.post(f"{FASTAPI_URL}/execute", json=payload)
         resp.raise_for_status()
         raw_json = resp.json()
-        result = raw_json.get('result', {})
+        raw_result = raw_json.get('result', {})
     except httpx.HTTPStatusError as e:
-        detail = e.response.text if e.response is not None else str(e)
+        status_code = e.response.status_code if e.response is not None else 500
+        if status_code == 502:
+            detail = "FastAPI service returned HTTP 502 Bad Gateway"
+        elif status_code == 429:
+            detail = "FastAPI service returned HTTP 429 Too Many Requests"
+        elif status_code == 503:
+            detail = "FastAPI service returned HTTP 503 Service Unavailable"
+        elif status_code == 504:
+            detail = "FastAPI service returned HTTP 504 Gateway Timeout"
+        else:
+            raw_text = e.response.text if e.response is not None else str(e)
+            if "<html" in raw_text.lower() or "<!doctype" in raw_text.lower():
+                detail = f"HTTP {status_code} Error"
+            else:
+                detail = raw_text[:200]
         raise ValueError(f"FastAPI execution error for '{node_type}': {detail}") from e
     except httpx.HTTPError as e:
-        raise ValueError(f"FastAPI service unreachable at {FASTAPI_URL}: {str(e)}") from e
+        raise ValueError(f"FastAPI service unreachable at {FASTAPI_URL}: {str(e)[:200]}") from e
 
-    # Extract artifacts from ML results
-    if 'model_b64' in result:
+    # Extract binary model artifacts safely before sanitizing
+    if 'model_b64' in raw_result and raw_result['model_b64']:
         ext = 'h5' if node_type in ['DenseNN', 'CNN', 'RNN', 'LSTM', 'GRU', 'Autoencoder'] else 'pkl'
-        artifacts['model'] = (ext, base64.b64decode(result['model_b64']))
+        try:
+            artifacts['model'] = (ext, base64.b64decode(raw_result['model_b64']))
+        except Exception:
+            pass
 
     for pkey in ['scaler_params', 'vectorizer_params', 'encoder_params']:
-        if pkey in result:
-            artifacts['node_json'] = result[pkey]
+        if pkey in raw_result:
+            artifacts['node_json'] = raw_result[pkey]
 
-    if 'columns' in result:
-        artifacts['features'] = result['columns']
+    if 'columns' in raw_result:
+        artifacts['features'] = raw_result['columns']
 
-    return result, artifacts, f"Finished node: {node_type}", node_type
+    # Produce sanitized result for graph persistence, WebSocket logging, and frontend
+    result = sanitize_execution_data(raw_result)
+
+    # Informative ML summary message for frontend logs
+    if isinstance(raw_result, dict):
+        if 'accuracy' in raw_result:
+            acc = float(raw_result['accuracy'])
+            prec = float(raw_result.get('precision', 0.0))
+            rec = float(raw_result.get('recall', 0.0))
+            f1 = float(raw_result.get('f1', 0.0))
+            msg = f"{node_type} completed — Accuracy: {acc:.4f}, Precision: {prec:.4f}, Recall: {rec:.4f}, F1: {f1:.4f}"
+        elif 'r2' in raw_result or 'mse' in raw_result:
+            r2_val = float(raw_result.get('r2', 0.0))
+            mse_val = float(raw_result.get('mse', 0.0))
+            msg = f"{node_type} completed — R²: {r2_val:.4f}, MSE: {mse_val:.4f}"
+        else:
+            msg = f"Completed block: {node_type}"
+    else:
+        msg = f"Completed block: {node_type}"
+
+    return result, artifacts, msg, node_type
 
 
 def save_node_artifacts(graph_id, node_id, artifacts):

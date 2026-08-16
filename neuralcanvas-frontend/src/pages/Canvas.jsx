@@ -1225,7 +1225,8 @@ export default function Canvas() {
               setRefreshTrigger((t) => t + 1)
             } else if (data.stage === 'error') {
               setStatus('failed')
-            } else if (data.stage === 'node_success') {
+              setRefreshTrigger((t) => t + 1)
+            } else if (data.stage === 'node_success' || data.stage === 'node_error') {
               setRefreshTrigger((t) => t + 1)
             } else if (data.stage === 'paused') {
               setStatus('paused')

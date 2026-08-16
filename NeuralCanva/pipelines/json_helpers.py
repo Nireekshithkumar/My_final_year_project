@@ -49,3 +49,39 @@ def clean_for_json(obj):
         return str(obj)
     except Exception:
         return None
+
+
+def sanitize_execution_data(data, max_string_len=500, max_list_len=100):
+    """
+    Recursively sanitizes execution results, hiding large binary/base64 blobs
+    (e.g., model_b64, serialized models) and truncating huge dataset arrays for safe
+    logging, WebSocket broadcasting, and JSON serialization.
+    """
+    if data is None:
+        return None
+    if isinstance(data, dict):
+        sanitized = {}
+        for k, v in data.items():
+            k_lower = str(k).lower()
+            if k_lower in ('model_b64', 'serialized_model', 'pickle', 'pickle_data', 'joblib_data', 'binary', 'artifact_data'):
+                sanitized[k] = "[hidden]"
+                if isinstance(v, str) and len(v) > 0:
+                    size_kb = (len(v) * 3 / 4) / 1024
+                    sanitized['model_size'] = f"{size_kb:.1f} KB"
+                    sanitized['model_artifact'] = "saved"
+            else:
+                sanitized[k] = sanitize_execution_data(v, max_string_len, max_list_len)
+        return clean_for_json(sanitized)
+    elif isinstance(data, (list, tuple, set)):
+        items = list(data)
+        if len(items) > max_list_len:
+            return [sanitize_execution_data(x, max_string_len, max_list_len) for x in items[:max_list_len]]
+        return [sanitize_execution_data(x, max_string_len, max_list_len) for x in items]
+    elif isinstance(data, str):
+        if len(data) > max_string_len:
+            if len(data) > 1000 and data.endswith(('=', '==', 'AAA', 'AA')):
+                return "[large base64 blob hidden]"
+            return data[:max_string_len] + "... [truncated]"
+        return data
+    return clean_for_json(data)
+

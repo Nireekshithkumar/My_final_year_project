@@ -486,8 +486,30 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
     test_size = params.pop('test_size', 0.2)
     stratify_flag = params.pop('stratify', False)
 
+    # LogisticRegression parameter validation and solver auto-selection
+    if algorithm_type == "LogisticRegression":
+        penalty = params.get('penalty')
+        solver = params.get('solver')
+        if penalty == 'l1':
+            if not solver or solver not in ('liblinear', 'saga'):
+                params['solver'] = 'liblinear'
+            params.pop('l1_ratio', None)
+        elif penalty == 'elasticnet':
+            if not solver or solver != 'saga':
+                params['solver'] = 'saga'
+            if 'l1_ratio' not in params:
+                params['l1_ratio'] = 0.5
+        elif penalty == 'none' or penalty is None:
+            # None penalty in modern scikit-learn
+            params['penalty'] = None
+
     clf_class = ALGORITHM_REGISTRY[algorithm_type]
-    model = clf_class(**params)
+    try:
+        model = clf_class(**params)
+    except TypeError as te:
+        raise ValueError(f"{algorithm_type} parameter error: {str(te)}") from te
+    except Exception as exc:
+        raise ValueError(f"{algorithm_type} initialization error: {str(exc)}") from exc
 
     # Preprocessing (Scalers)
     if algorithm_type in ["StandardScaler", "MinMaxScaler", "RobustScaler", "MaxAbsScaler", "Normalizer"]:

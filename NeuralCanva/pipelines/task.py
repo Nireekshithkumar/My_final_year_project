@@ -175,7 +175,11 @@ def execute_graph(graph_id):
         )
 
     except Exception as e:
-        error_str = str(e)
+        raw_err = str(e)
+        if len(raw_err) > 300:
+            error_str = raw_err[:300] + "... [truncated]"
+        else:
+            error_str = raw_err
         logger.error(f"Graph {graph_id} failed with Exception: {error_str}", exc_info=True)
         try:
             target_graph = Graph.objects.get(id=graph_id)
