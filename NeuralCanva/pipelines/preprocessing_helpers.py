@@ -362,11 +362,17 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
         except Dataset.DoesNotExist:
             raise ValueError(f"Dataset with ID '{dataset_id}' does not exist. Please re-upload or select a valid dataset.")
 
-        # Robust file path resolution across direct path, MEDIA_ROOT, and BASE_DIR
+        # Robust file path resolution across default_storage, direct path, MEDIA_ROOT, and BASE_DIR
         file_path = None
         candidates = []
         if dataset.file:
             try:
+                from django.core.files.storage import default_storage
+                if hasattr(default_storage, 'path'):
+                    try:
+                        candidates.append(default_storage.path(dataset.file.name))
+                    except Exception:
+                        pass
                 candidates.append(dataset.file.path)
             except Exception:
                 pass
@@ -382,8 +388,8 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
 
         if not file_path:
             raise ValueError(
-                f"Dataset file '{dataset.name}' could not be found on disk (server filesystem was reset on deploy/restart). "
-                f"Please re-upload or re-attach the CSV dataset in the '{node_data.get('title', 'Load Dataset')}' block."
+                f"Dataset file '{dataset.name}' could not be found in configured storage. "
+                f"Please re-upload or select the dataset in the '{node_data.get('title', 'Load Dataset')}' block."
             )
 
         df = pd.read_csv(file_path)
