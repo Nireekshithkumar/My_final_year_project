@@ -302,14 +302,6 @@ CORS_ALLOWED_ORIGINS = [
     "https://neuralcanvasteam.vercel.app",
 ]
 
-VERCEL_FRONTEND_URL = os.environ.get("VERCEL_FRONTEND_URL")
-if VERCEL_FRONTEND_URL:
-    clean_vercel_url = VERCEL_FRONTEND_URL.rstrip("/")
-    if clean_vercel_url not in CORS_ALLOWED_ORIGINS:
-        CORS_ALLOWED_ORIGINS.append(clean_vercel_url)
-    if clean_vercel_url not in CSRF_TRUSTED_ORIGINS:
-        CSRF_TRUSTED_ORIGINS.append(clean_vercel_url)
-
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https:\/\/.*\.vercel\.app$",
 ]
@@ -320,6 +312,12 @@ CORS_ALLOW_CREDENTIALS = True
 # ============================================================
 # CSRF
 # ============================================================
+
+# IMPORTANT: CSRF_TRUSTED_ORIGINS must be defined BEFORE the dynamic
+# VERCEL_FRONTEND_URL block below, which appends to it.
+# Previously this list appeared after the dynamic block, causing:
+#   NameError: name 'CSRF_TRUSTED_ORIGINS' is not defined
+# on Render (where VERCEL_FRONTEND_URL env var is set).
 
 CSRF_COOKIE_HTTPONLY = False
 
@@ -333,8 +331,16 @@ CSRF_TRUSTED_ORIGINS = [
     "https://*.vercel.app",
 ]
 
-if VERCEL_FRONTEND_URL and clean_vercel_url not in CSRF_TRUSTED_ORIGINS:
-    CSRF_TRUSTED_ORIGINS.append(clean_vercel_url)
+
+# Dynamic: append the runtime Vercel URL (from env) to both lists if set.
+# Trailing slashes are stripped so origins are always scheme://host with no path.
+VERCEL_FRONTEND_URL = os.environ.get("VERCEL_FRONTEND_URL")
+if VERCEL_FRONTEND_URL:
+    clean_vercel_url = VERCEL_FRONTEND_URL.strip().rstrip("/")
+    if clean_vercel_url not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(clean_vercel_url)
+    if clean_vercel_url not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(clean_vercel_url)
 
 
 # ============================================================
