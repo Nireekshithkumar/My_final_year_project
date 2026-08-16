@@ -30,6 +30,22 @@ const nodeTypes = { taskNode: TaskNode }
 let idCounter = 1
 const getId = () => `node_${idCounter++}`
 
+// Advance the module-level counter past the highest numeric node ID that
+// was loaded from the backend, so new nodes never collide with existing ones.
+function syncIdCounterWithNodes(loadedNodes) {
+  let maxNum = 0
+  for (const n of loadedNodes) {
+    const match = String(n.id || '').match(/^node_(\d+)$/)
+    if (match) {
+      const num = parseInt(match[1], 10)
+      if (num > maxNum) maxNum = num
+    }
+  }
+  if (maxNum >= idCounter) {
+    idCounter = maxNum + 1
+  }
+}
+
 const OUTPUT_PRESETS = {
   approval: [
     { id: 'approve', label: 'Approve Task', color: '#22c55e' },
@@ -127,6 +143,8 @@ const FlowCanvas = forwardRef(function FlowCanvas(
 
   const nodesRef = useRef(nodes)
   nodesRef.current = nodes
+  const edgesRef = useRef(edges)
+  edgesRef.current = edges
 
   const handlePredict = useCallback(
     async (nodeId) => {
@@ -190,6 +208,25 @@ const FlowCanvas = forwardRef(function FlowCanvas(
     async (nodeId) => {
       const targetNode = nodesRef.current.find((n) => n.id === nodeId)
       const title = targetNode?.data?.title || nodeId
+      const nodeType = targetNode?.data?.nodeType
+
+      // Guard: loadDataset nodes must have a dataset attached before running.
+      if (nodeType === 'loadDataset' && !targetNode?.data?.datasetId) {
+        const msg = `Please select a dataset for '${title}' before running this block.`
+        setError(msg)
+        if (setLogs) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'ERROR',
+              message: `⚠️ ${msg}`,
+            },
+          ])
+        }
+        return
+      }
+
       updateNodeData(nodeId, { status: 'running' })
       setError('')
 
@@ -198,10 +235,40 @@ const FlowCanvas = forwardRef(function FlowCanvas(
           ...prev,
           {
             timestamp: new Date().toLocaleTimeString(),
-            stage: targetNode?.data?.nodeType || 'NODE',
+            stage: nodeType || 'NODE',
             message: `⚡ Quick-running block: ${title}…`,
           },
         ])
+      }
+
+      // Sync the graph to the backend before running so the backend's node table
+      // always matches the current React state. Without this, any unsaved node
+      // addition causes a "Node not found" 404 on the run endpoint.
+      try {
+        if (pipelineId) {
+          await api.put(`/pipelines/${pipelineId}/graph/`, {
+            nodes: nodesRef.current,
+            edges: edgesRef.current,
+          })
+        }
+      } catch (saveErr) {
+        const saveMsg =
+          saveErr.response?.data?.non_field_errors?.[0] ||
+          saveErr.response?.data?.detail ||
+          'Failed to save graph before running block.'
+        setError(saveMsg)
+        updateNodeData(nodeId, { status: 'failed' })
+        if (setLogs) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'ERROR',
+              message: `❌ Could not save graph: ${saveMsg}`,
+            },
+          ])
+        }
+        return
       }
 
       try {
@@ -240,7 +307,7 @@ const FlowCanvas = forwardRef(function FlowCanvas(
         }
       }
     },
-    [pipelineId, updateNodeData, setRefreshTrigger, setLogs]
+    [pipelineId, updateNodeData, setRefreshTrigger, setLogs, setError]
   )
 
   const onConnect = useCallback(
@@ -456,6 +523,18 @@ const FlowCanvas = forwardRef(function FlowCanvas(
     const loadGraph = async () => {
       if (!pipelineId) return
 
+      // Show a transient loading message while the async fetch is in flight so
+      // the user never sees the misleading "0 blocks configured" message.
+      if (setLogs) {
+        setLogs([
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: 'INFO',
+            message: '⏳ Loading pipeline graph…',
+          },
+        ])
+      }
+
       try {
         const { data } = await api.get(`/pipelines/${pipelineId}/graph/`)
 
@@ -502,6 +581,11 @@ const FlowCanvas = forwardRef(function FlowCanvas(
             },
           }
         })
+
+        // Advance idCounter past the highest existing node number so that any
+        // node added after this load won't collide with a backend ID.
+        syncIdCounterWithNodes(loadedNodes)
+
         setNodes(loadedNodes)
         setEdges(data.edges || [])
 
@@ -532,22 +616,95 @@ const FlowCanvas = forwardRef(function FlowCanvas(
               },
             ])
           } else {
+            const blockWord = loadedNodes.length === 1 ? 'block' : 'blocks'
             setLogs([
               {
                 timestamp: new Date().toLocaleTimeString(),
                 stage: 'INFO',
-                message: `📋 Pipeline canvas ready (${loadedNodes.length} blocks configured). Click 'Run' to execute.`,
+                message: loadedNodes.length === 0
+                  ? `📋 Pipeline canvas is empty. Drag blocks from the left panel to build your workflow.`
+                  : `📋 Pipeline canvas ready (${loadedNodes.length} ${blockWord} configured). Click 'Run' to execute.`,
               },
             ])
           }
         }
       } catch {
-        // ignore missing graph on first load
+        // Graph doesn't exist yet (new pipeline) — show a helpful prompt.
+        if (setLogs) {
+          setLogs([
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'INFO',
+              message: '📋 New pipeline — drag blocks from the left panel to start building.',
+            },
+          ])
+        }
       }
     }
 
     loadGraph()
   }, [pipelineId, handlePredict, handleRunNode, setNodes, setEdges, setLogs, onStatusChange, setProgress])
+
+  // ── HTTP Polling fallback for pipeline status ──────────────────────────────
+  // WebSockets on Render free-tier can silently disconnect. This effect polls
+  // GET /pipelines/{id}/graph/ every 2 s while status === 'running' so the UI
+  // always transitions to success/failed even without a WS delivery.
+  useEffect(() => {
+    if (status !== 'running' || !pipelineId) return
+
+    const intervalId = setInterval(async () => {
+      try {
+        const { data } = await api.get(`/pipelines/${pipelineId}/graph/`)
+        const polledStatus = data?.status
+
+        if (polledStatus === 'success') {
+          clearInterval(intervalId)
+          if (onStatusChange) onStatusChange('success')
+          if (setProgress) setProgress(100)
+          // Mirror success onto all nodes
+          setNodes((nds) =>
+            nds.map((n) => ({ ...n, data: { ...n.data, status: 'success' } }))
+          )
+          if (setLogs) {
+            setLogs((prev) => [
+              ...prev,
+              {
+                timestamp: new Date().toLocaleTimeString(),
+                stage: 'SUCCESS',
+                message: data.elapsed_seconds
+                  ? `✅ Pipeline completed in ${data.elapsed_seconds}s.`
+                  : '✅ Pipeline completed successfully.',
+              },
+            ])
+          }
+        } else if (polledStatus === 'failed') {
+          clearInterval(intervalId)
+          if (onStatusChange) onStatusChange('failed')
+          setNodes((nds) =>
+            nds.map((n) => ({
+              ...n,
+              data: { ...n.data, status: n.data.status === 'running' ? 'failed' : n.data.status },
+            }))
+          )
+          if (setLogs) {
+            setLogs((prev) => [
+              ...prev,
+              {
+                timestamp: new Date().toLocaleTimeString(),
+                stage: 'ERROR',
+                message: `❌ Pipeline failed: ${data.error || 'An error occurred during execution.'}`,
+              },
+            ])
+          }
+        }
+        // While polledStatus === 'running', do nothing and keep polling.
+      } catch {
+        // Network error during poll — keep retrying until interval is cleared.
+      }
+    }, 2000)
+
+    return () => clearInterval(intervalId)
+  }, [status, pipelineId, onStatusChange, setProgress, setNodes, setLogs])
 
   // Left Panel Resize Drag Handle
   const handleLeftResize = (e) => {

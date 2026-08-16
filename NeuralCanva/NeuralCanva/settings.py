@@ -302,6 +302,18 @@ CORS_ALLOWED_ORIGINS = [
     "https://neuralcanvasteam.vercel.app",
 ]
 
+VERCEL_FRONTEND_URL = os.environ.get("VERCEL_FRONTEND_URL")
+if VERCEL_FRONTEND_URL:
+    clean_vercel_url = VERCEL_FRONTEND_URL.rstrip("/")
+    if clean_vercel_url not in CORS_ALLOWED_ORIGINS:
+        CORS_ALLOWED_ORIGINS.append(clean_vercel_url)
+    if clean_vercel_url not in CSRF_TRUSTED_ORIGINS:
+        CSRF_TRUSTED_ORIGINS.append(clean_vercel_url)
+
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https:\/\/.*\.vercel\.app$",
+]
+
 CORS_ALLOW_CREDENTIALS = True
 
 
@@ -318,7 +330,11 @@ CSRF_TRUSTED_ORIGINS = [
 
     # Production frontend
     "https://neuralcanvasteam.vercel.app",
+    "https://*.vercel.app",
 ]
+
+if VERCEL_FRONTEND_URL and clean_vercel_url not in CSRF_TRUSTED_ORIGINS:
+    CSRF_TRUSTED_ORIGINS.append(clean_vercel_url)
 
 
 # ============================================================

@@ -70,14 +70,31 @@ class GraphExecuteView(APIView):
         with transaction.atomic():
             graph = Graph.objects.select_for_update().get(id=graph.id)
             if graph.status == 'running':
-                return Response(
-                    {
-                        'message': 'Pipeline is already running.',
-                        'graph_id': graph.id,
-                        'status': 'running',
-                    },
-                    status=409,
-                )
+                # Safe stale-running recovery: If execution has exceeded a reasonable timeout (e.g. 180s)
+                # or user explicitly provided force flag, recover from deadlocked/crashed state.
+                from django.utils import timezone
+                is_stale = False
+                if graph.updated_at:
+                    elapsed_since_update = (timezone.now() - graph.updated_at).total_seconds()
+                    if elapsed_since_update > 180:
+                        is_stale = True
+                
+                force_rerun = request.data.get('force', False) if isinstance(request.data, dict) else False
+
+                if is_stale or force_rerun:
+                    logger.warning(f"Recovering stale running graph {graph.id} (last updated {elapsed_since_update if graph.updated_at else 'unknown'}s ago).")
+                    graph.status = 'failed'
+                    graph.error = "Previous execution terminated unexpectedly or timed out. State recovered."
+                    graph.save(update_fields=['status', 'error', 'updated_at'])
+                else:
+                    return Response(
+                        {
+                            'message': 'Pipeline is already running.',
+                            'graph_id': graph.id,
+                            'status': 'running',
+                        },
+                        status=409,
+                    )
 
             graph.status = 'running'
             graph.error = ''

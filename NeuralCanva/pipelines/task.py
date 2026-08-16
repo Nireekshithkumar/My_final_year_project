@@ -110,6 +110,7 @@ def execute_graph(graph_id):
                 percent=percent_before
             )
 
+            node_t0 = time.time()
             # Execute single node via unified engine
             result, artifacts, broadcast_msg, stage = execute_single_node(
                 node,
@@ -118,6 +119,7 @@ def execute_graph(graph_id):
                 nodes=nodes,
                 edges=edges
             )
+            node_elapsed = round(time.time() - node_t0, 2)
 
             # Save artifacts
             save_node_artifacts(graph.id, node_id, artifacts)
@@ -125,7 +127,7 @@ def execute_graph(graph_id):
             node_outputs[node_id] = result
 
             percent_after = int(((i + 1) / total_nodes) * 100) if total_nodes else 100
-            broadcast(graph.pipeline_id, broadcast_msg, stage=stage, percent=percent_after)
+            broadcast(graph.pipeline_id, f"{broadcast_msg} [{node_elapsed}s]", stage=stage, percent=percent_after)
 
         final_output = node_outputs.get(execution_order[-1]) if execution_order else None
         elapsed = round(time.time() - start_time, 2)

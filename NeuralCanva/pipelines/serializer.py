@@ -5,8 +5,8 @@ from .models import Pipeline, Graph
 class GraphSerializer(serializers.ModelSerializer):
     class Meta:
         model = Graph
-        fields = ['id', 'nodes', 'edges', 'status', 'result', 'error', 'updated_at']
-        read_only_fields = ['status', 'result', 'error', 'updated_at']
+        fields = ['id', 'nodes', 'edges', 'status', 'result', 'error', 'updated_at', 'elapsed_seconds']
+        read_only_fields = ['status', 'result', 'error', 'updated_at', 'elapsed_seconds']
 
     def validate(self, data):
         nodes = data.get('nodes', [])
