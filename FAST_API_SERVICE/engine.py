@@ -22,7 +22,8 @@ from sklearn.preprocessing import (
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
 from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
 from sklearn.metrics import (
-    accuracy_score, mean_squared_error, r2_score,
+    accuracy_score, mean_squared_error, mean_absolute_error, r2_score,
+    explained_variance_score, precision_score, recall_score, f1_score,
     classification_report, confusion_matrix, roc_curve
 )
 import tensorflow as tf
@@ -418,14 +419,64 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
         model_bytes = pickle.dumps(best_model)
         model_b64 = base64.b64encode(model_bytes).decode('utf-8')
 
-        return {
-            "best_params": search.best_params_,
-            "best_score": float(search.best_score_),
-            "predictions": predictions.tolist(),
-            "accuracy": float(accuracy_score(y_test, predictions)) if sub_algo.endswith("Classifier") else float(mean_squared_error(y_test, predictions)),
-            "model_b64": model_b64,
-            "y_test": y_test.tolist(),
-        }
+        if sub_algo.endswith("Classifier") or sub_algo in ["SVC", "LogisticRegression", "GaussianNB", "MultinomialNB"]:
+            cm = confusion_matrix(y_test, predictions).tolist()
+            acc = float(accuracy_score(y_test, predictions))
+            prec = float(precision_score(y_test, predictions, average='weighted', zero_division=0))
+            rec = float(recall_score(y_test, predictions, average='weighted', zero_division=0))
+            f1_val = float(f1_score(y_test, predictions, average='weighted', zero_division=0))
+            report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
+            return {
+                "best_params": search.best_params_,
+                "best_score": float(search.best_score_),
+                "predictions": predictions.tolist(),
+                "accuracy": acc,
+                "precision": prec,
+                "recall": rec,
+                "f1": f1_val,
+                "confusion_matrix": cm,
+                "classification_report": report,
+                "metrics": {
+                    "task_type": "classification",
+                    "accuracy": acc,
+                    "precision": prec,
+                    "recall": rec,
+                    "f1": f1_val,
+                    "confusion_matrix": cm,
+                    "classification_report": report,
+                },
+                "plots": {"confusion_matrix": cm},
+                "model_b64": model_b64,
+                "y_test": y_test.tolist(),
+            }
+        else:
+            mse_val = float(mean_squared_error(y_test, predictions))
+            rmse_val = float(np.sqrt(mse_val))
+            mae_val = float(mean_absolute_error(y_test, predictions))
+            r2_val = float(r2_score(y_test, predictions))
+            return {
+                "best_params": search.best_params_,
+                "best_score": float(search.best_score_),
+                "predictions": predictions.tolist(),
+                "r2": r2_val,
+                "mse": mse_val,
+                "rmse": rmse_val,
+                "mae": mae_val,
+                "metrics": {
+                    "task_type": "regression",
+                    "r2": r2_val,
+                    "mse": mse_val,
+                    "rmse": rmse_val,
+                    "mae": mae_val,
+                },
+                "plots": {
+                    "actual": y_test.tolist(),
+                    "predicted": predictions.tolist(),
+                    "residuals": (y_test - predictions).tolist()
+                },
+                "model_b64": model_b64,
+                "y_test": y_test.tolist(),
+            }
 
     # Custom column-selection params aren't real sklearn constructor args — extract them first
     selected_columns = params.pop('columns', None)
@@ -577,39 +628,106 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
         "ExtraTreesRegressor", "XGBRegressor", "LGBMRegressor"
     ]
     if is_regression:
+        mse_val = float(mean_squared_error(y_test, predictions))
+        rmse_val = float(np.sqrt(mse_val))
+        mae_val = float(mean_absolute_error(y_test, predictions))
+        r2_val = float(r2_score(y_test, predictions))
+        try:
+            exp_var = float(explained_variance_score(y_test, predictions))
+        except Exception:
+            exp_var = r2_val
+
+        # MAPE calculation
+        try:
+            non_zero = y_test != 0
+            if np.any(non_zero):
+                mape_val = float(np.mean(np.abs((y_test[non_zero] - predictions[non_zero]) / y_test[non_zero])) * 100)
+            else:
+                mape_val = 0.0
+        except Exception:
+            mape_val = 0.0
+
+        plots_data = {
+            "actual": y_test.tolist(),
+            "predicted": predictions.tolist(),
+            "residuals": (y_test - predictions).tolist()
+        }
+        if hasattr(model, 'feature_importances_'):
+            plots_data["feature_importances"] = model.feature_importances_.tolist()
+        elif hasattr(model, 'coef_'):
+            coefs = model.coef_
+            plots_data["feature_importances"] = np.abs(coefs).tolist() if hasattr(coefs, 'tolist') else [float(c) for c in coefs]
+
+        metrics_obj = {
+            "task_type": "regression",
+            "r2": r2_val,
+            "mse": mse_val,
+            "rmse": rmse_val,
+            "mae": mae_val,
+            "mape": mape_val,
+            "explained_variance": exp_var,
+        }
+
         res = {
             "predictions": predictions.tolist(),
-            "mse": float(mean_squared_error(y_test, predictions)),
-            "r2": float(r2_score(y_test, predictions)),
+            "r2": r2_val,
+            "mse": mse_val,
+            "rmse": rmse_val,
+            "mae": mae_val,
+            "mape": mape_val,
+            "explained_variance": exp_var,
+            "metrics": metrics_obj,
+            "plots": plots_data,
             "model_b64": model_b64,
             "y_test": y_test.tolist(),
         }
-        if include_plots:
-            res["plots"] = {
-                "actual": y_test.tolist(),
-                "predicted": predictions.tolist(),
-                "residuals": (y_test - predictions).tolist()
-            }
         return res
     else:
         cm = confusion_matrix(y_test, predictions).tolist()
-        res = {
-            "predictions": predictions.tolist(),
-            "accuracy": float(accuracy_score(y_test, predictions)),
-            "classification_report": classification_report(y_test, predictions, output_dict=True),
-            "confusion_matrix": cm,
-            "model_b64": model_b64,
-            "y_test": y_test.tolist(),
-        }
-        if include_plots:
-            plot_data = {"confusion_matrix": cm}
-            if hasattr(model, 'feature_importances_'):
-                plot_data["feature_importances"] = model.feature_importances_.tolist()
-            if hasattr(model, 'predict_proba') and len(np.unique(y_test)) == 2:
+        acc_val = float(accuracy_score(y_test, predictions))
+        prec_val = float(precision_score(y_test, predictions, average='weighted', zero_division=0))
+        rec_val = float(recall_score(y_test, predictions, average='weighted', zero_division=0))
+        f1_val = float(f1_score(y_test, predictions, average='weighted', zero_division=0))
+        report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
+
+        plot_data = {"confusion_matrix": cm}
+        if hasattr(model, 'feature_importances_'):
+            plot_data["feature_importances"] = model.feature_importances_.tolist()
+        elif hasattr(model, 'coef_'):
+            coefs = model.coef_
+            plot_data["feature_importances"] = np.abs(coefs[0] if len(coefs.shape) > 1 else coefs).tolist()
+
+        if hasattr(model, 'predict_proba') and len(np.unique(y_test)) == 2:
+            try:
                 probs = model.predict_proba(X_test)[:, 1]
                 fpr, tpr, _ = roc_curve(y_test, probs)
                 plot_data["roc_curve"] = {"fpr": fpr.tolist(), "tpr": tpr.tolist()}
-            res["plots"] = plot_data
+            except Exception:
+                pass
+
+        metrics_obj = {
+            "task_type": "classification",
+            "accuracy": acc_val,
+            "precision": prec_val,
+            "recall": rec_val,
+            "f1": f1_val,
+            "classification_report": report,
+            "confusion_matrix": cm,
+        }
+
+        res = {
+            "predictions": predictions.tolist(),
+            "accuracy": acc_val,
+            "precision": prec_val,
+            "recall": rec_val,
+            "f1": f1_val,
+            "classification_report": report,
+            "confusion_matrix": cm,
+            "metrics": metrics_obj,
+            "plots": plot_data,
+            "model_b64": model_b64,
+            "y_test": y_test.tolist(),
+        }
         return res
 
 # ─── DL ALGORITHMS ────────────────────────────────────────────────────────────

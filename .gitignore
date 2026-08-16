@@ -1,0 +1,40 @@
+# Secrets and Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+venv/
+.venv/
+env/
+ENV/
+
+# Django / DB / Cache / Logs
+*.log
+db.sqlite3
+db.sqlite3-journal
+dump.rdb
+staticfiles/
+media/
+*.cache
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+frontend/.env
+frontend/.env.local
+frontend/.env.production.local
+.oxlintrc.json
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

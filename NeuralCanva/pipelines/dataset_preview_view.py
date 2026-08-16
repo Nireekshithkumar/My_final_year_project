@@ -6,6 +6,7 @@ from rest_framework.permissions import IsAuthenticated
 from accounts.authentication import CsrfExemptSessionAuthentication
 from .models import Graph
 
+
 class DatasetPreviewView(APIView):
     authentication_classes = [CsrfExemptSessionAuthentication]
     permission_classes = [IsAuthenticated]
@@ -17,16 +18,37 @@ class DatasetPreviewView(APIView):
             return JsonResponse({"detail": "Pipeline graph not found."}, status=404)
 
         node_outputs = graph.node_outputs or {}
-        if not node_outputs:
-            return JsonResponse({"detail": "No node output cached yet. Run the pipeline or node first."}, status=404)
-
         target_node_id = node_id
         if not target_node_id or target_node_id == 'latest':
-            target_node_id = list(node_outputs.keys())[-1]
+            target_node_id = list(node_outputs.keys())[-1] if node_outputs else None
 
-        output_data = node_outputs.get(target_node_id)
+        output_data = node_outputs.get(target_node_id) if target_node_id else None
+
+        # If no output cached yet, check if this is a loadDataset node that we can read directly
         if not output_data:
-            return JsonResponse({"detail": f"No output found for node '{target_node_id}'."}, status=404)
+            nodes = graph.nodes or []
+            target_node = next((n for n in nodes if isinstance(n, dict) and str(n.get('id')) == str(target_node_id)), None)
+            if target_node:
+                t_data = target_node.get('data', {})
+                if t_data.get('nodeType') == 'loadDataset' and t_data.get('datasetId'):
+                    from datasets.models import Dataset
+                    import os
+                    try:
+                        ds = Dataset.objects.get(id=t_data['datasetId'])
+                        if ds.file and os.path.exists(ds.file.path):
+                            loaded_df = pd.read_csv(ds.file.path)
+                            output_data = {
+                                "dataframe": loaded_df.to_dict(orient='list'),
+                                "columns": list(loaded_df.columns),
+                                "column_types": ds.column_types or {}
+                            }
+                    except Exception:
+                        pass
+
+        if not output_data:
+            if not target_node_id or target_node_id == 'latest':
+                return JsonResponse({"detail": "No node output cached yet. Run the pipeline or node first."}, status=404)
+            return JsonResponse({"detail": f"No output found for node '{target_node_id}'. Run the block or pipeline first."}, status=404)
 
         # Build DataFrame from cached output structure
         df = None
@@ -68,13 +90,40 @@ class DatasetPreviewView(APIView):
                 row_data["actual"] = actual[:min_len]
             df = pd.DataFrame(row_data)
 
-
-        if df is None or df.empty:
-            return JsonResponse({"detail": "Node output does not contain previewable tabular data."}, status=400)
-
         # Pagination params
         page = int(request.GET.get('page', 1))
         page_size = int(request.GET.get('page_size', 50))
+
+        if df is None or df.empty:
+            # Check for non-tabular metric / artifact outputs
+            has_artifacts = any(k in output_data for k in [
+                "metrics", "plots", "confusion_matrix", "classification_report",
+                "accuracy", "f1", "precision", "recall", "r2", "rmse", "mse", "mae",
+                "null_summary", "histogram", "boxplot", "correlation_matrix", "explained_variance_ratio"
+            ])
+            if has_artifacts:
+                response_data = {
+                    "node_id": target_node_id,
+                    "page": page,
+                    "page_size": page_size,
+                    "total_rows": 0,
+                    "total_columns": 0,
+                    "columns": [],
+                    "column_types": {},
+                    "column_stats": {},
+                    "rows": [],
+                }
+                for key in [
+                    "metrics", "plots", "confusion_matrix", "classification_report",
+                    "accuracy", "f1", "precision", "recall", "r2", "rmse", "mse", "mae",
+                    "null_summary", "histogram", "boxplot", "correlation_matrix", "explained_variance_ratio"
+                ]:
+                    if key in output_data:
+                        response_data[key] = output_data[key]
+                return JsonResponse(response_data)
+
+            return JsonResponse({"detail": "Node output does not contain previewable tabular data."}, status=400)
+
         total_rows = len(df)
         total_columns = len(df.columns)
 
@@ -162,4 +211,3 @@ class DatasetPreviewView(APIView):
                 response_data[key] = output_data[key]
 
         return JsonResponse(response_data)
-

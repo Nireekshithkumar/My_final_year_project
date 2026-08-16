@@ -48,7 +48,9 @@ const FlowCanvas = forwardRef(function FlowCanvas(
     logs = [],
     setLogs,
     progress = 0,
+    setProgress,
     status = 'idle',
+    setPredictionResult,
     showLeftPanel = true,
     showRightPanel = true,
     showBottomPanel = true,
@@ -93,7 +95,12 @@ const FlowCanvas = forwardRef(function FlowCanvas(
 
       if (parentNode.data?.nodeType === 'splitDataset') {
         const allCols = getUpstreamColumns(parentNode.id, visited)
-        const target = parentNode.data.params?.target_column
+        const target =
+          parentNode.data.params?.target_column ||
+          parentNode.data.params?.targetColumn ||
+          parentNode.data.params?.target ||
+          parentNode.data.params?.label_column ||
+          parentNode.data.params?.label
         return target ? allCols.filter((c) => c !== target) : allCols
       }
 
@@ -124,28 +131,79 @@ const FlowCanvas = forwardRef(function FlowCanvas(
   const handlePredict = useCallback(
     async (nodeId) => {
       const node = nodesRef.current.find((n) => n.id === nodeId)
+      const title = node?.data?.title || nodeId
       const featureValues = node?.data?.params?.feature_values || {}
+
+      if (setLogs) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: 'PREDICT',
+            message: `🔮 Requesting inference for block '${title}'…`,
+          },
+        ])
+      }
+
+      updateNodeData(nodeId, { status: 'running' })
 
       try {
         const { data } = await api.post(`/pipelines/${pipelineId}/predict/`, {
           feature_values: featureValues,
         })
         updateNodeData(nodeId, { lastPrediction: data.prediction, status: 'success' })
+        if (onStatusChange) onStatusChange('success')
+        if (setPredictionResult) setPredictionResult(`🎯 Predicted: ${data.prediction}`)
+        if (setLogs) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'PREDICT',
+              message: `🎯 Prediction result for '${title}': ${data.prediction}`,
+            },
+          ])
+        }
       } catch (err) {
+        const errMsg = err.response?.data?.error || 'Prediction failed'
         updateNodeData(nodeId, {
-          lastPrediction: 'Error: ' + (err.response?.data?.error || 'prediction failed'),
+          lastPrediction: 'Error: ' + errMsg,
           status: 'failed',
         })
+        if (onStatusChange) onStatusChange('failed')
+        if (setLogs) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'ERROR',
+              message: `❌ Inference failed for '${title}': ${errMsg}`,
+            },
+          ])
+        }
       }
     },
-    [pipelineId, updateNodeData]
+    [pipelineId, updateNodeData, setLogs, onStatusChange, setPredictionResult]
   )
 
   const handleRunNode = useCallback(
     async (nodeId) => {
       const targetNode = nodesRef.current.find((n) => n.id === nodeId)
+      const title = targetNode?.data?.title || nodeId
       updateNodeData(nodeId, { status: 'running' })
       setError('')
+
+      if (setLogs) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: targetNode?.data?.nodeType || 'NODE',
+            message: `⚡ Quick-running block: ${title}…`,
+          },
+        ])
+      }
+
       try {
         const { data } = await api.post(`/pipelines/${pipelineId}/nodes/${nodeId}/run/`)
         const result = data?.result || {}
@@ -155,14 +213,34 @@ const FlowCanvas = forwardRef(function FlowCanvas(
           status: 'success',
           ...(newCols ? { columns: newCols } : {}),
         })
+        if (setLogs) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'SUCCESS',
+              message: `✅ Block '${title}' finished successfully.`,
+            },
+          ])
+        }
         setRefreshTrigger((t) => t + 1)
       } catch (err) {
-        const msg = err.response?.data?.detail || 'Node execution failed.'
+        const msg = err.response?.data?.detail || err.response?.data?.error || 'Node execution failed.'
         setError(msg)
         updateNodeData(nodeId, { status: 'failed' })
+        if (setLogs) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'ERROR',
+              message: `❌ Block '${title}' failed: ${msg}`,
+            },
+          ])
+        }
       }
     },
-    [pipelineId, updateNodeData, setRefreshTrigger]
+    [pipelineId, updateNodeData, setRefreshTrigger, setLogs]
   )
 
   const onConnect = useCallback(
@@ -212,22 +290,38 @@ const FlowCanvas = forwardRef(function FlowCanvas(
     [onStatusChange, screenToFlowPosition, setNodes, handlePredict, handleRunNode]
   )
 
-  // Client-side DAG cycle detection
-  const hasCycle = useCallback((nodeList, edgeList) => {
+  // Client-side defensive DAG validation
+  const validateGraphStructure = useCallback((nodeList, edgeList) => {
+    const nodeIds = new Set(nodeList.map((n) => String(n.id)))
+
+    for (const e of edgeList) {
+      if (!nodeIds.has(String(e.source))) {
+        return { valid: false, error: `Connection references non-existent source block: ${e.source}` }
+      }
+      if (!nodeIds.has(String(e.target))) {
+        return { valid: false, error: `Connection references non-existent target block: ${e.target}` }
+      }
+      if (String(e.source) === String(e.target)) {
+        return { valid: false, error: `Self-loop connection detected on block: ${e.source}` }
+      }
+    }
+
     const adj = {}
     nodeList.forEach((n) => {
-      adj[n.id] = []
+      adj[String(n.id)] = []
     })
     edgeList.forEach((e) => {
-      if (adj[e.source]) adj[e.source].push(e.target)
+      if (adj[String(e.source)]) adj[String(e.source)].push(String(e.target))
     })
+
     const WHITE = 0,
       GREY = 1,
       BLACK = 2
     const color = {}
     nodeList.forEach((n) => {
-      color[n.id] = WHITE
+      color[String(n.id)] = WHITE
     })
+
     const dfs = (v) => {
       color[v] = GREY
       for (const w of adj[v] || []) {
@@ -237,15 +331,21 @@ const FlowCanvas = forwardRef(function FlowCanvas(
       color[v] = BLACK
       return false
     }
-    return nodeList.some((n) => color[n.id] === WHITE && dfs(n.id))
+
+    const cycleDetected = nodeList.some((n) => color[String(n.id)] === WHITE && dfs(String(n.id)))
+    if (cycleDetected) {
+      return { valid: false, error: '⚠️ Your pipeline contains a cycle (loop). Connections must flow strictly in one direction.' }
+    }
+    return { valid: true }
   }, [])
 
   const saveGraph = useCallback(async () => {
     if (!pipelineId) return
 
-    if (hasCycle(nodes, edges)) {
+    const validation = validateGraphStructure(nodes, edges)
+    if (!validation.valid) {
       onStatusChange('failed')
-      setError('⚠️ Your pipeline contains a cycle (loop). Connections must flow in one direction.')
+      setError(validation.error)
       return
     }
 
@@ -262,13 +362,24 @@ const FlowCanvas = forwardRef(function FlowCanvas(
         'Unable to save the workflow.'
       setError(serverMsg)
     }
-  }, [edges, hasCycle, nodes, onStatusChange, pipelineId])
+  }, [edges, nodes, onStatusChange, pipelineId, validateGraphStructure])
 
   const runGraph = useCallback(async () => {
     if (!pipelineId) return
 
-    if (hasCycle(nodes, edges)) {
-      setError('⚠️ Cannot run: pipeline contains a cycle. Fix the graph connections first.')
+    const validation = validateGraphStructure(nodes, edges)
+    if (!validation.valid) {
+      setError(validation.error)
+      if (setLogs) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: 'ERROR',
+            message: `⚠️ Validation error: ${validation.error}`,
+          },
+        ])
+      }
       return
     }
 
@@ -276,13 +387,50 @@ const FlowCanvas = forwardRef(function FlowCanvas(
       setError('')
       onStatusChange('running')
       setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'running' } })))
+      if (setLogs) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: 'START',
+            message: `🚀 Initiating pipeline DAG execution across ${nodes.length} blocks…`,
+          },
+        ])
+      }
       await api.post(`/pipelines/${pipelineId}/execute/`)
     } catch (err) {
-      onStatusChange('failed')
-      setError(err.response?.data?.detail || 'Unable to run the workflow.')
-      setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'failed' } })))
+      if (err.response?.status === 409) {
+        onStatusChange('running')
+        const msg = err.response?.data?.message || 'Pipeline is already running.'
+        setError(msg)
+        if (setLogs) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'RUNNING',
+              message: `ℹ️ ${msg}`,
+            },
+          ])
+        }
+      } else {
+        onStatusChange('failed')
+        const errDetail = err.response?.data?.detail || err.response?.data?.message || 'Unable to run the workflow.'
+        setError(errDetail)
+        setNodes((nds) => nds.map((n) => ({ ...n, data: { ...n.data, status: 'failed' } })))
+        if (setLogs) {
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'ERROR',
+              message: `❌ Pipeline trigger failed: ${errDetail}`,
+            },
+          ])
+        }
+      }
     }
-  }, [edges, hasCycle, nodes, onStatusChange, pipelineId, setNodes])
+  }, [edges, nodes, onStatusChange, pipelineId, setNodes, validateGraphStructure, setLogs])
 
   const clearGraph = useCallback(() => {
     setNodes([])
@@ -310,24 +458,96 @@ const FlowCanvas = forwardRef(function FlowCanvas(
 
       try {
         const { data } = await api.get(`/pipelines/${pipelineId}/graph/`)
-        const loadedNodes = (data.nodes || []).map((n) => ({
-          ...n,
-          data: {
-            ...n?.data,
-            onPredict: handlePredict,
-            onRunNode: handleRunNode,
-            status: n?.data?.status || 'ready',
-          },
-        }))
+
+        // Fetch datasets to enrich loadDataset nodes with column metadata if needed
+        let datasetMap = {}
+        try {
+          const dsRes = await api.get('/datasets/')
+          const list = Array.isArray(dsRes.data) ? dsRes.data : dsRes.data.results || []
+          list.forEach((d) => {
+            datasetMap[String(d.id)] = d
+          })
+        } catch {
+          // ignore dataset fetch error
+        }
+
+        const loadedNodes = (data.nodes || []).map((n) => {
+          let extraData = {}
+          if (n.data?.nodeType === 'loadDataset' && n.data?.datasetId) {
+            const ds = datasetMap[String(n.data.datasetId)]
+            if (ds) {
+              const dsColTypes = ds.column_types && Object.keys(ds.column_types).length > 0
+                ? ds.column_types : null
+              const nodeColTypes = n.data.columnTypes && Object.keys(n.data.columnTypes).length > 0
+                ? n.data.columnTypes : null
+              const dsCols = Array.isArray(ds.columns) && ds.columns.length > 0
+                ? ds.columns : null
+              const nodeCols = Array.isArray(n.data.columns) && n.data.columns.length > 0
+                ? n.data.columns : null
+              extraData = {
+                columns: dsCols || nodeCols || [],
+                columnTypes: dsColTypes || nodeColTypes || {},
+                subtitle: ds.name || n.data.subtitle,
+              }
+            }
+          }
+          return {
+            ...n,
+            data: {
+              ...n?.data,
+              ...extraData,
+              onPredict: handlePredict,
+              onRunNode: handleRunNode,
+              status: n?.data?.status || 'ready',
+            },
+          }
+        })
         setNodes(loadedNodes)
         setEdges(data.edges || [])
+
+        if (data.status === 'success') {
+          if (onStatusChange) onStatusChange('success')
+          if (setProgress) setProgress(100)
+        } else if (data.status === 'failed') {
+          if (onStatusChange) onStatusChange('failed')
+        } else if (data.status === 'idle') {
+          if (onStatusChange) onStatusChange('idle')
+        }
+
+        if (setLogs) {
+          if (data.status === 'success' && data.elapsed_seconds) {
+            setLogs([
+              {
+                timestamp: new Date().toLocaleTimeString(),
+                stage: 'INFO',
+                message: `✨ Pipeline loaded. Last run finished in ${data.elapsed_seconds}s (Status: Success). Ready for execution.`,
+              },
+            ])
+          } else if (data.status === 'failed' && data.error) {
+            setLogs([
+              {
+                timestamp: new Date().toLocaleTimeString(),
+                stage: 'ERROR',
+                message: `⚠️ Last run failed: ${data.error}`,
+              },
+            ])
+          } else {
+            setLogs([
+              {
+                timestamp: new Date().toLocaleTimeString(),
+                stage: 'INFO',
+                message: `📋 Pipeline canvas ready (${loadedNodes.length} blocks configured). Click 'Run' to execute.`,
+              },
+            ])
+          }
+        }
       } catch {
         // ignore missing graph on first load
       }
     }
 
     loadGraph()
-  }, [pipelineId, handlePredict, handleRunNode, setNodes, setEdges])
+  }, [pipelineId, handlePredict, handleRunNode, setNodes, setEdges, setLogs, onStatusChange, setProgress])
 
   // Left Panel Resize Drag Handle
   const handleLeftResize = (e) => {
@@ -710,51 +930,129 @@ export default function Canvas() {
     loadPipeline()
   }, [navigate, pipelineId])
 
+  const socketRef = useRef(null)
+
   useEffect(() => {
     if (!pipelineId || isNaN(pipelineId)) return
 
-    const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-    const ws = new WebSocket(`${wsProtocol}//${window.location.host}/ws/runs/${pipelineId}/logs/`)
+    let isUnmounted = false
+    let reconnectTimeout = null
+    let reconnectAttempts = 0
+    const maxReconnectAttempts = 5
 
-    ws.onmessage = (event) => {
+    const getWsUrl = () => {
+      const customWsUrl = import.meta.env.VITE_WS_URL
+      if (customWsUrl) {
+        return `${customWsUrl.replace(/\/+$/, '')}/ws/runs/${pipelineId}/logs/`
+      }
+      const apiUrl = import.meta.env.VITE_API_URL
+      if (apiUrl && /^https?:\/\//i.test(apiUrl)) {
+        const wsProto = apiUrl.startsWith('https:') ? 'wss:' : 'ws:'
+        const host = apiUrl.replace(/^https?:\/\//i, '').split('/')[0]
+        return `${wsProto}//${host}/ws/runs/${pipelineId}/logs/`
+      }
+      const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      return `${wsProtocol}//${window.location.host}/ws/runs/${pipelineId}/logs/`
+    }
+
+    const connectWebSocket = () => {
+      if (isUnmounted) return
+
+      if (socketRef.current) {
+        socketRef.current.onclose = null
+        socketRef.current.onerror = null
+        socketRef.current.onmessage = null
+        socketRef.current.close()
+        socketRef.current = null
+      }
+
       try {
-        const data = JSON.parse(event.data)
-        if (data.percent !== null && data.percent !== undefined) {
-          setProgress(data.percent)
+        const wsUrl = getWsUrl()
+        const ws = new WebSocket(wsUrl)
+        socketRef.current = ws
+
+        let pingInterval = null
+
+        ws.onopen = () => {
+          reconnectAttempts = 0
+          // Send a ping every 25 seconds so the server-side Redis subscription
+          // does not time out on idle connections.
+          pingInterval = setInterval(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              try {
+                ws.send(JSON.stringify({ type: 'ping' }))
+              } catch {}
+            }
+          }, 25000)
         }
-        if (data.stage === 'predict') {
-          setPredictionResult(data.message)
+
+        ws.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data)
+            // Ignore pong messages from the server
+            if (data.type === 'pong') return
+            if (data.percent !== null && data.percent !== undefined) {
+              setProgress(data.percent)
+            }
+            if (data.stage === 'predict') {
+              setPredictionResult(data.message)
+            }
+            if (data.message) {
+              setLogs((prev) => [
+                ...prev,
+                {
+                  timestamp: new Date().toLocaleTimeString(),
+                  stage: data.stage || 'EVENT',
+                  message: data.message,
+                },
+              ])
+            }
+            if (data.stage === 'done' || data.stage === 'cached') {
+              setStatus('success')
+              setRefreshTrigger((t) => t + 1)
+            } else if (data.stage === 'error') {
+              setStatus('failed')
+            } else if (data.stage === 'node_success') {
+              setRefreshTrigger((t) => t + 1)
+            } else if (data.stage === 'paused') {
+              setStatus('paused')
+            } else if (data.stage === 'stopped') {
+              setStatus('idle')
+            }
+          } catch {}
         }
-        if (data.message) {
-          setLogs((prev) => [
-            ...prev,
-            {
-              timestamp: new Date().toLocaleTimeString(),
-              stage: data.stage || 'EVENT',
-              message: data.message,
-            },
-          ])
+
+        ws.onerror = () => {
+          // Handled via onclose
         }
-        if (data.stage === 'done' || data.stage === 'cached') {
-          setStatus('success')
-          setRefreshTrigger((t) => t + 1)
-        } else if (data.stage === 'error') {
-          setStatus('failed')
-        } else if (data.stage === 'node_success') {
-          setRefreshTrigger((t) => t + 1)
-        } else if (data.stage === 'paused') {
-          setStatus('paused')
-        } else if (data.stage === 'stopped') {
-          setStatus('idle')
+
+        ws.onclose = (event) => {
+          if (pingInterval) clearInterval(pingInterval)
+          if (isUnmounted) return
+          if (!event.wasClean && reconnectAttempts < maxReconnectAttempts) {
+            reconnectAttempts += 1
+            const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000)
+            reconnectTimeout = setTimeout(connectWebSocket, delay)
+          }
         }
-      } catch {}
+      } catch {
+        // Handle sync constructor errors (e.g. invalid URL)
+      }
     }
 
-    ws.onerror = () => {
-      console.error('WebSocket connection failed for run logs.')
-    }
+    connectWebSocket()
 
-    return () => ws.close()
+    return () => {
+      isUnmounted = true
+      if (reconnectTimeout) clearTimeout(reconnectTimeout)
+      if (socketRef.current) {
+        socketRef.current.onclose = null
+        socketRef.current.onerror = null
+        socketRef.current.onmessage = null
+        socketRef.current.close()
+        socketRef.current = null
+      }
+    }
   }, [pipelineId])
 
   const handleUpdate = async () => {
@@ -800,8 +1098,12 @@ export default function Canvas() {
       ])
       await api.post(`/pipelines/${pipelineId}/execute/`)
     } catch (err) {
-      setStatus('failed')
-      console.error('Failed to resume execution:', err)
+      if (err.response?.status === 409) {
+        setStatus('running')
+      } else {
+        setStatus('failed')
+        console.error('Failed to resume execution:', err)
+      }
     }
   }
 
@@ -894,7 +1196,9 @@ export default function Canvas() {
           logs={logs}
           setLogs={setLogs}
           progress={progress}
+          setProgress={setProgress}
           status={status}
+          setPredictionResult={setPredictionResult}
           showLeftPanel={showLeftPanel}
           showRightPanel={showRightPanel}
           showBottomPanel={showBottomPanel}

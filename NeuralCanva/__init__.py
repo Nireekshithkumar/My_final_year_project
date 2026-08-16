@@ -1,1 +1,0 @@
-# Celery removed. This file is intentionally empty.

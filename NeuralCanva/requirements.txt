@@ -57,6 +57,7 @@ pydantic_core==2.46.4
 Pygments==2.20.0
 pyOpenSSL==26.3.0
 python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
 redis==8.1.0
 requests==2.34.2
 rich==15.0.0

@@ -55,7 +55,11 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
           {/* Select */}
           {field.type === "select" && (
             <select
-              value={params[field.name] ?? field.default ?? ""}
+              value={
+                (field.name === "target_column"
+                  ? (params.target_column || params.targetColumn || params.target || params.label_column || params.label)
+                  : params[field.name]) ?? field.default ?? ""
+              }
               onChange={(e) => handleChange(field.name, e.target.value)}
               style={inputStyle(c)}
             >

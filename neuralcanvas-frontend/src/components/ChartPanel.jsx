@@ -83,8 +83,12 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
   const rmse = data?.rmse ?? metrics?.rmse;
   const mse = data?.mse ?? metrics?.mse;
   const mae = data?.mae ?? metrics?.mae;
+  const mape = data?.mape ?? metrics?.mape;
+  const explainedVariance = data?.explained_variance ?? metrics?.explained_variance;
 
-  const hasMetrics = accuracy !== undefined || r2 !== undefined || confusionMatrix || classificationReport;
+  const isRegression = metrics?.task_type === 'regression' || (r2 !== undefined && accuracy === undefined) || (mse !== undefined && accuracy === undefined);
+  const isClassification = metrics?.task_type === 'classification' || accuracy !== undefined || f1 !== undefined || Boolean(confusionMatrix) || Boolean(classificationReport);
+  const hasMetrics = isRegression || isClassification;
 
   const numericCols = useMemo(() => {
     return columns.filter((col) => {
@@ -373,68 +377,113 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
             {/* 🎯 MODEL METRICS TAB */}
             {activeTab === "metrics" && (
               <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+                {/* Metric Summary Header */}
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "6px 10px", background: "rgba(255, 255, 255, 0.03)", borderRadius: 6, border: "1px solid rgba(255, 255, 255, 0.06)" }}>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: isRegression ? "#86efac" : "#ff85be" }}>
+                    {isRegression ? "📈 Regression Model Performance" : "🎯 Classification Model Performance"}
+                  </span>
+                  <span style={{ fontSize: 10, padding: "2px 6px", borderRadius: 4, background: isRegression ? "rgba(34, 197, 94, 0.15)" : "rgba(255, 0, 113, 0.15)", color: isRegression ? "#86efac" : "#ff85be", fontWeight: 700 }}>
+                    {isRegression ? "REGRESSION" : "CLASSIFICATION"}
+                  </span>
+                </div>
+
                 {/* Metric Summary Cards */}
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 10 }}>
-                  {accuracy !== undefined && (
-                    <div style={metricCardStyle}>
-                      <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>ACCURACY</span>
-                      <span style={{ fontSize: 20, fontWeight: 900, color: "#86efac" }}>
-                        {(accuracy * 100).toFixed(1)}%
-                      </span>
-                    </div>
+                  {/* Classification Metrics */}
+                  {isClassification && (
+                    <>
+                      {accuracy !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>ACCURACY</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#86efac" }}>
+                            {(accuracy * 100).toFixed(1)}%
+                          </span>
+                        </div>
+                      )}
+                      {f1 !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>F1 SCORE</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#ff85be" }}>
+                            {typeof f1 === "number" ? f1.toFixed(3) : f1}
+                          </span>
+                        </div>
+                      )}
+                      {precision !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>PRECISION</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#06b6d4" }}>
+                            {typeof precision === "number" ? precision.toFixed(3) : precision}
+                          </span>
+                        </div>
+                      )}
+                      {recall !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>RECALL</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#a855f7" }}>
+                            {typeof recall === "number" ? recall.toFixed(3) : recall}
+                          </span>
+                        </div>
+                      )}
+                    </>
                   )}
-                  {f1 !== undefined && (
-                    <div style={metricCardStyle}>
-                      <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>F1 SCORE</span>
-                      <span style={{ fontSize: 20, fontWeight: 900, color: "#ff85be" }}>
-                        {typeof f1 === "number" ? f1.toFixed(3) : f1}
-                      </span>
-                    </div>
-                  )}
-                  {precision !== undefined && (
-                    <div style={metricCardStyle}>
-                      <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>PRECISION</span>
-                      <span style={{ fontSize: 20, fontWeight: 900, color: "#06b6d4" }}>
-                        {typeof precision === "number" ? precision.toFixed(3) : precision}
-                      </span>
-                    </div>
-                  )}
-                  {recall !== undefined && (
-                    <div style={metricCardStyle}>
-                      <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>RECALL</span>
-                      <span style={{ fontSize: 20, fontWeight: 900, color: "#a855f7" }}>
-                        {typeof recall === "number" ? recall.toFixed(3) : recall}
-                      </span>
-                    </div>
-                  )}
-                  {r2 !== undefined && (
-                    <div style={metricCardStyle}>
-                      <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>R² COEFFICIENT</span>
-                      <span style={{ fontSize: 20, fontWeight: 900, color: "#86efac" }}>
-                        {typeof r2 === "number" ? r2.toFixed(4) : r2}
-                      </span>
-                    </div>
-                  )}
-                  {rmse !== undefined && (
-                    <div style={metricCardStyle}>
-                      <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>RMSE</span>
-                      <span style={{ fontSize: 20, fontWeight: 900, color: "#fca5a5" }}>
-                        {typeof rmse === "number" ? rmse.toFixed(4) : rmse}
-                      </span>
-                    </div>
-                  )}
-                  {mae !== undefined && (
-                    <div style={metricCardStyle}>
-                      <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>MAE</span>
-                      <span style={{ fontSize: 20, fontWeight: 900, color: "#f59e0b" }}>
-                        {typeof mae === "number" ? mae.toFixed(4) : mae}
-                      </span>
-                    </div>
+
+                  {/* Regression Metrics */}
+                  {isRegression && (
+                    <>
+                      {r2 !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>R² SCORE</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#86efac" }}>
+                            {typeof r2 === "number" ? r2.toFixed(4) : r2}
+                          </span>
+                        </div>
+                      )}
+                      {rmse !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>RMSE (ROOT MSE)</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#38bdf8" }}>
+                            {typeof rmse === "number" ? rmse.toFixed(4) : rmse}
+                          </span>
+                        </div>
+                      )}
+                      {mae !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>MAE (MEAN ABS ERROR)</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#f59e0b" }}>
+                            {typeof mae === "number" ? mae.toFixed(4) : mae}
+                          </span>
+                        </div>
+                      )}
+                      {mse !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>MSE (MEAN SQ ERROR)</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#fca5a5" }}>
+                            {typeof mse === "number" ? mse.toFixed(4) : mse}
+                          </span>
+                        </div>
+                      )}
+                      {mape !== undefined && mape > 0 && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>MAPE</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#c084fc" }}>
+                            {typeof mape === "number" ? `${mape.toFixed(2)}%` : mape}
+                          </span>
+                        </div>
+                      )}
+                      {explainedVariance !== undefined && (
+                        <div style={metricCardStyle}>
+                          <span style={{ fontSize: 10, color: "#64748b", fontWeight: 700 }}>EXPLAINED VARIANCE</span>
+                          <span style={{ fontSize: 20, fontWeight: 900, color: "#a7f3d0" }}>
+                            {typeof explainedVariance === "number" ? explainedVariance.toFixed(4) : explainedVariance}
+                          </span>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
 
                 {/* Confusion Matrix Visualizer */}
-                {confusionMatrix && Array.isArray(confusionMatrix) && (
+                {isClassification && confusionMatrix && Array.isArray(confusionMatrix) && (
                   <div style={{ background: "#080c14", padding: 10, borderRadius: 8, border: "1px solid rgba(255, 255, 255, 0.08)" }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: "#ff85be", marginBottom: 8 }}>
                       🎯 Confusion Matrix
@@ -478,7 +527,7 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                 )}
 
                 {/* Classification Report Bar Chart */}
-                {classReportData.length > 0 && (
+                {isClassification && classReportData.length > 0 && (
                   <div style={{ height: 190, marginTop: 4 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: "#06b6d4", marginBottom: 6 }}>
                       📊 Per-Class Precision / Recall / F1 (%)
@@ -499,7 +548,7 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                 )}
 
                 {/* Regression Actual vs Predicted Scatter */}
-                {regressionScatterData.length > 0 && (
+                {isRegression && regressionScatterData.length > 0 && (
                   <div style={{ height: 210, marginTop: 4 }}>
                     <div style={{ fontSize: 11, fontWeight: 700, color: "#86efac", marginBottom: 6 }}>
                       📈 Actual vs Predicted Values (Regression Fit)

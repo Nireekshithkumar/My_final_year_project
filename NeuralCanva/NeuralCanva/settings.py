@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import dj_database_url
+from dotenv import load_dotenv
 
 
 # ============================================================
@@ -13,6 +14,19 @@ import dj_database_url
 # ============================================================
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+# Explicitly load .env from the project root
+ENV_FILE = BASE_DIR / ".env"
+load_dotenv(ENV_FILE)
+
+
+# ============================================================
+# REDIS / VALKEY
+# ============================================================
+
+REDIS_URL = os.getenv("REDIS_URL")
+
+load_dotenv(BASE_DIR / ".env", override=True)
 
 
 # ============================================================
@@ -223,14 +237,27 @@ AUTH_USER_MODEL = "accounts.User"
 
 
 # ============================================================
-# REDIS
+# REDIS / VALKEY
 # ============================================================
 
-REDIS_URL = os.environ.get(
-    "REDIS_URL",
-    "redis://127.0.0.1:6379/0"
-)
+REDIS_URL = os.getenv("REDIS_URL")
 
+if not REDIS_URL:
+    if not DEBUG:
+        raise RuntimeError(
+            "REDIS_URL is not configured for production."
+        )
+    REDIS_URL = "redis://127.0.0.1:6379/0"
+
+
+# ============================================================
+# FASTAPI ML SERVICE
+# ============================================================
+
+FASTAPI_URL = os.getenv(
+    "FASTAPI_URL",
+    "http://localhost:8001"
+)
 
 
 # ============================================================
@@ -308,12 +335,20 @@ AUTHENTICATION_BACKENDS = [
 # SESSION / COOKIE CONFIGURATION
 # ============================================================
 
-# Required because frontend and backend are on different domains.
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
+if not DEBUG:
+    # Required because frontend and backend are on different domains in production.
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
-SESSION_COOKIE_SAMESITE = "None"
-CSRF_COOKIE_SAMESITE = "None"
+    SESSION_COOKIE_SAMESITE = "None"
+    CSRF_COOKIE_SAMESITE = "None"
+else:
+    # Local development over HTTP
+    SESSION_COOKIE_SECURE = False
+    CSRF_COOKIE_SECURE = False
+
+    SESSION_COOKIE_SAMESITE = "Lax"
+    CSRF_COOKIE_SAMESITE = "Lax"
 
 
 # ============================================================
@@ -324,9 +359,19 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [
-                REDIS_URL
-            ],
+            "hosts": [REDIS_URL],
+            # Prevent idle WebSocket connections from triggering TimeoutError.
+            # socket_connect_timeout: max seconds to wait establishing connection.
+            # socket_timeout: None = block indefinitely (no read timeout), which is
+            #   correct for long-lived WebSocket channel subscriptions.
+            # expiry: message TTL in seconds — keeps Redis clean.
+            # capacity: max messages queued per channel.
+            "expiry": 60,
+            "capacity": 1500,
+            "channel_capacity": {
+                "http.request": 200,
+                "http.response*": 10,
+            },
         },
     },
 }
