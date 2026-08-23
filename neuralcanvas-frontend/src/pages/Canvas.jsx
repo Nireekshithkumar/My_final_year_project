@@ -20,6 +20,7 @@ import Toolbar from '../components/Toolbar'
 import DatasetViewer from '../components/DatasetViewer'
 import TransformationHistory from '../components/TransformationHistory'
 import ChartPanel from '../components/ChartPanel'
+import ExecutionLogs from '../components/ExecutionLogs'
 import ErrorBoundary from '../components/ErrorBoundary'
 import { PARAM_SCHEMAS } from '../config/paramSchemas'
 import api from '../api/axios'
@@ -75,6 +76,7 @@ const FlowCanvas = forwardRef(function FlowCanvas(
     showLeftPanel = true,
     showRightPanel = true,
     showBottomPanel = true,
+    setActiveDatasetId,
   },
   ref
 ) {
@@ -207,6 +209,14 @@ const FlowCanvas = forwardRef(function FlowCanvas(
       }
     },
     [pipelineId, updateNodeData, setLogs, onStatusChange, setPredictionResult]
+  )
+
+  const handleDownload = useCallback(
+    (nodeId, params) => {
+      if (!pipelineId) return
+      window.location.href = `/api/pipelines/${pipelineId}/download/`
+    },
+    [pipelineId]
   )
 
   const handleRunNode = useCallback(
@@ -900,31 +910,45 @@ const FlowCanvas = forwardRef(function FlowCanvas(
           />
         )}
 
-        {/* Center ReactFlow Interactive Canvas */}
-        <div style={{ flex: 1, position: 'relative', height: '100%', minWidth: 200 }} ref={reactFlowWrapper}>
-          <ReactFlow
-            nodes={nodes}
-            edges={edges}
-            nodeTypes={nodeTypes}
-            onNodesChange={onNodesChange}
-            onEdgesChange={onEdgesChange}
-            onConnect={onConnect}
-            onDrop={onDrop}
-            onDragOver={onDragOver}
-            onNodeClick={(_, node) => setSelectedNodeId(node.id)}
-            onPaneClick={() => setSelectedNodeId(null)}
-            fitView
-            connectionRadius={32}
-            defaultEdgeOptions={{
-              type: 'smoothstep',
-              animated: true,
-              style: { stroke: '#ff0071', strokeWidth: 2, strokeDasharray: '5, 5' },
-              markerEnd: { type: MarkerType.ArrowClosed, color: '#ff0071', width: 18, height: 18 },
-            }}
-          >
-            <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} color="rgba(255, 0, 113, 0.15)" />
-            <Controls />
-          </ReactFlow>
+        {/* Center Canvas Area with ReactFlow and Bottom Dataset Viewer */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', minWidth: 200, overflow: 'hidden' }}>
+          <div style={{ flex: 1, position: 'relative', minHeight: 150 }} ref={reactFlowWrapper}>
+            <ReactFlow
+              nodes={nodes}
+              edges={edges}
+              nodeTypes={nodeTypes}
+              onNodesChange={onNodesChange}
+              onEdgesChange={onEdgesChange}
+              onConnect={onConnect}
+              onDrop={onDrop}
+              onDragOver={onDragOver}
+              onNodeClick={(_, node) => setSelectedNodeId(node.id)}
+              onPaneClick={() => setSelectedNodeId(null)}
+              fitView
+              connectionRadius={32}
+              defaultEdgeOptions={{
+                type: 'smoothstep',
+                animated: true,
+                style: { stroke: '#ff0071', strokeWidth: 2, strokeDasharray: '5, 5' },
+                markerEnd: { type: MarkerType.ArrowClosed, color: '#ff0071', width: 18, height: 18 },
+              }}
+            >
+              <Background variant={BackgroundVariant.Dots} gap={20} size={1.5} color="rgba(255, 0, 113, 0.15)" />
+              <Controls />
+            </ReactFlow>
+          </div>
+
+          {/* Bottom Dataset Viewer / Data Table Panel */}
+          {showBottomPanel && (
+            <DatasetViewer
+              pipelineId={pipelineId}
+              selectedNodeId={selectedNodeId}
+              isDark={isDark}
+              refreshTrigger={refreshTrigger}
+              height={bottomHeight}
+              onHeightChange={setBottomHeight}
+            />
+          )}
         </div>
 
         {/* Right Resizer Divider Handle */}
@@ -1011,7 +1035,7 @@ const FlowCanvas = forwardRef(function FlowCanvas(
 
                   {selectedNode.data?.nodeType === 'loadDataset' && (
                     <DatasetUpload
-                      onUploaded={(dataset) =>
+                      onUploaded={(dataset) => {
                         updateNodeData(selectedNode.id, {
                           datasetId: String(dataset.id),
                           dataset_id: String(dataset.id),
@@ -1021,7 +1045,9 @@ const FlowCanvas = forwardRef(function FlowCanvas(
                           subtitle: dataset.name,
                           status: 'ready',
                         })
-                      }
+                        if (setActiveDatasetId) setActiveDatasetId(String(dataset.id))
+                        setRefreshTrigger((t) => t + 1)
+                      }}
                     />
                   )}
 
@@ -1397,7 +1423,7 @@ export default function Canvas() {
   }
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 56px)', background: isDark ? '#0f172a' : '#fff', overflow: 'hidden' }}>
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, background: isDark ? '#0f172a' : '#fff', overflow: 'hidden' }}>
       <Toolbar
         pipelineName={workflowName}
         status={status}
@@ -1444,6 +1470,7 @@ export default function Canvas() {
           showLeftPanel={showLeftPanel}
           showRightPanel={showRightPanel}
           showBottomPanel={showBottomPanel}
+          setActiveDatasetId={setActiveDatasetId}
         />
       </ReactFlowProvider>
 
