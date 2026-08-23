@@ -82,6 +82,7 @@ INSTALLED_APPS = [
     "datasets",
     "nodes",
     "pipelines",
+    "ai",
 ]
 
 

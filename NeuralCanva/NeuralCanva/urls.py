@@ -24,4 +24,5 @@ urlpatterns = [
     path("api/auth/", include("accounts.urls")),
     path('api/pipelines/', include('pipelines.urls')),
     path('api/datasets/', include('datasets.urls')),
+    path('api/ai/', include('ai.urls')),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

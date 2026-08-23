@@ -1,12 +1,13 @@
 import axios from 'axios'
 
 const api = axios.create({
-  baseURL: import.meta.env.VITE_API_URL || '/api',
+  baseURL: 'https://neuralcanvas-backend.onrender.com/api',
   withCredentials: true,
 })
 
 api.interceptors.request.use((config) => {
   const method = config.method?.toLowerCase()
+
   if (method && ['post', 'put', 'patch', 'delete'].includes(method)) {
     const csrfToken = document.cookie
       .split('; ')

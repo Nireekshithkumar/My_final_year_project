@@ -5,6 +5,7 @@ import Login from './pages/Login'
 import Register from './pages/Register'
 import Dashboard from './pages/Dashboard'
 import Canvas from './pages/Canvas.jsx'
+import AICopilot from './pages/AICopilot.jsx'
 import Navbar from './components/Navbar'
 import ErrorBoundary from './components/ErrorBoundary'
 import useStore from './store/useStore'
@@ -56,6 +57,7 @@ export default function App() {
           <Route path='/login' element={<PublicRoute><Login /></PublicRoute>} />
           <Route path='/register' element={<PublicRoute><Register /></PublicRoute>} />
           <Route path='/dashboard' element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path='/ai-copilot' element={<ProtectedRoute><AICopilot /></ProtectedRoute>} />
           <Route path='/pipeline/:id' element={<ProtectedRoute><Canvas /></ProtectedRoute>} />
         </Routes>
       </BrowserRouter>

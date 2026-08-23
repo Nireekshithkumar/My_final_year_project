@@ -1,9 +1,11 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, createContext, useContext } from "react";
 import {
   ResponsiveContainer, ScatterChart, Scatter, LineChart, Line, BarChart, Bar,
   XAxis, YAxis, Tooltip, CartesianGrid, Legend, Cell, ReferenceLine, Area, AreaChart
 } from "recharts";
 import api from "../api/axios";
+
+const FullscreenContext = createContext(false);
 
 // ─── Gradient definitions injected once ────────────────────────────────────
 const GRADIENT_SVG = (
@@ -261,119 +263,314 @@ function downloadChartCSV(data, filename = "chart_data.csv") {
   } catch {}
 }
 
-// ─── Chart container with rich toolbar ─────────────────────────────────────────
+// ─── Chart container with rich toolbar & full screen expansion ─────────────────
 const ChartContainer = ({ title, color = "#ff0071", children, chartRef, chartData }) => {
   const [hovered, setHovered] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const localRef = useRef(null);
+  const targetRef = chartRef || localRef;
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isFs = Boolean(
+        document.fullscreenElement && (document.fullscreenElement === targetRef.current || targetRef.current?.contains(document.fullscreenElement))
+      );
+      setIsFullscreen(isFs);
+      if (!isFs) setZoom(1);
+    };
+
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    document.addEventListener("webkitfullscreenchange", handleFullscreenChange);
+    document.addEventListener("mozfullscreenchange", handleFullscreenChange);
+    document.addEventListener("MSFullscreenChange", handleFullscreenChange);
+
+    return () => {
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
+      document.removeEventListener("webkitfullscreenchange", handleFullscreenChange);
+      document.removeEventListener("mozfullscreenchange", handleFullscreenChange);
+      document.removeEventListener("MSFullscreenChange", handleFullscreenChange);
+    };
+  }, [targetRef]);
 
   const toggleFullscreen = () => {
-    if (!chartRef.current) return;
+    const el = targetRef.current;
+    if (!el) return;
     if (!document.fullscreenElement) {
-      chartRef.current.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
+      if (el.requestFullscreen) {
+        el.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+      } else if (el.webkitRequestFullscreen) {
+        el.webkitRequestFullscreen();
+        setIsFullscreen(true);
+      } else if (el.msRequestFullscreen) {
+        el.msRequestFullscreen();
+        setIsFullscreen(true);
+      }
     } else {
-      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
+      if (document.exitFullscreen) {
+        document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+      } else if (document.webkitExitFullscreen) {
+        document.webkitExitFullscreen();
+        setIsFullscreen(false);
+      } else if (document.msExitFullscreen) {
+        document.msExitFullscreen();
+        setIsFullscreen(false);
+      }
     }
   };
 
   const safeTitle = title.replace(/\s+/g, "_");
 
   return (
-    <div
-      ref={chartRef}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      style={{
-        background: isFullscreen ? "#080c14" : "rgba(8,12,20,0.7)",
-        borderRadius: 12,
-        border: "1px solid rgba(255,255,255,0.07)",
-        padding: "14px 14px 10px",
-        position: "relative",
-        transition: "border-color 0.2s",
-        borderColor: hovered ? `${color}44` : "rgba(255,255,255,0.07)",
-        boxShadow: hovered ? `0 4px 32px ${color}18` : "none",
-        overflow: "hidden",
-      }}
-    >
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 0.3 }}>{title}</span>
-        
-        {/* Interactive Chart Toolbar */}
-        <div style={{ display: "flex", gap: 4, opacity: hovered || isFullscreen ? 1 : 0.7, transition: "opacity 0.2s" }}>
-          <button
-            onClick={() => setZoom((z) => Math.min(z + 0.2, 2.5))}
-            title="Zoom In"
-            style={btnToolStyle(color)}
-          >
-            +
-          </button>
-          <button
-            onClick={() => setZoom((z) => Math.max(z - 0.2, 0.5))}
-            title="Zoom Out"
-            style={btnToolStyle(color)}
-          >
-            -
-          </button>
-          {zoom !== 1 && (
-            <button
-              onClick={() => setZoom(1)}
-              title="Reset Zoom"
-              style={btnToolStyle(color)}
-            >
-              ↺
-            </button>
-          )}
-          <button
-            onClick={toggleFullscreen}
-            title="Toggle Fullscreen"
-            style={btnToolStyle(color)}
-          >
-            ⛶
-          </button>
-          <button
-            onClick={() => chartRef && downloadPNG(chartRef, `${safeTitle}.png`)}
-            title="Download PNG"
-            style={btnToolStyle(color)}
-          >
-            PNG
-          </button>
-          <button
-            onClick={() => chartRef && downloadSVG(chartRef, `${safeTitle}.svg`)}
-            title="Download SVG"
-            style={btnToolStyle(color)}
-          >
-            SVG
-          </button>
-          {chartData && (
-            <button
-              onClick={() => downloadChartCSV(chartData, `${safeTitle}.csv`)}
-              title="Download Data CSV"
-              style={btnToolStyle(color)}
-            >
-              CSV
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Chart Canvas with Smooth Scale Transformation */}
+    <FullscreenContext.Provider value={isFullscreen}>
       <div
+        ref={targetRef}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         style={{
-          transform: `scale(${zoom})`,
-          transformOrigin: "center center",
-          transition: "transform 0.15s ease-out",
+          background: isFullscreen ? "#050811" : "rgba(8,12,20,0.7)",
+          borderRadius: isFullscreen ? 0 : 12,
+          border: isFullscreen ? "none" : "1px solid rgba(255,255,255,0.07)",
+          padding: isFullscreen ? "28px 36px 36px" : "14px 14px 10px",
+          position: "relative",
+          transition: "border-color 0.2s, background 0.2s",
+          borderColor: hovered ? `${color}44` : "rgba(255,255,255,0.07)",
+          boxShadow: hovered ? `0 4px 32px ${color}18` : "none",
+          overflow: "auto",
+          width: isFullscreen ? "100vw" : "100%",
+          height: isFullscreen ? "100vh" : "auto",
+          minHeight: isFullscreen ? "100vh" : "auto",
+          boxSizing: "border-box",
+          display: "flex",
+          flexDirection: "column",
+          zIndex: isFullscreen ? 99999 : 1,
         }}
       >
-        {children}
+        <div style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: isFullscreen ? 20 : 10,
+          borderBottom: isFullscreen ? "1px solid rgba(255,255,255,0.08)" : "none",
+          paddingBottom: isFullscreen ? 16 : 0,
+        }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+            <span style={{
+              fontSize: isFullscreen ? 18 : 11,
+              fontWeight: 800,
+              color,
+              letterSpacing: 0.3,
+              fontFamily: isFullscreen ? "'Space Grotesk', sans-serif" : "inherit",
+            }}>
+              {title}
+            </span>
+            {isFullscreen && (
+              <span style={{
+                fontSize: 11,
+                color: "#94a3b8",
+                background: "rgba(255,255,255,0.06)",
+                padding: "3px 10px",
+                borderRadius: 12,
+                border: "1px solid rgba(255,255,255,0.1)",
+              }}>
+                Full Screen Mode • Press ESC to exit
+              </span>
+            )}
+          </div>
+          
+          {/* Interactive Chart Toolbar */}
+          <div style={{ display: "flex", gap: isFullscreen ? 8 : 4, opacity: hovered || isFullscreen ? 1 : 0.7, transition: "opacity 0.2s" }}>
+            <button
+              onClick={() => setZoom((z) => Math.min(z + 0.2, 2.5))}
+              title="Zoom In"
+              style={btnToolStyle(color, isFullscreen)}
+            >
+              +
+            </button>
+            <button
+              onClick={() => setZoom((z) => Math.max(z - 0.2, 0.5))}
+              title="Zoom Out"
+              style={btnToolStyle(color, isFullscreen)}
+            >
+              -
+            </button>
+            {zoom !== 1 && (
+              <button
+                onClick={() => setZoom(1)}
+                title="Reset Zoom"
+                style={btnToolStyle(color, isFullscreen)}
+              >
+                ↺ Reset
+              </button>
+            )}
+            <button
+              onClick={toggleFullscreen}
+              title={isFullscreen ? "Exit Fullscreen (ESC)" : "Toggle Fullscreen"}
+              style={{
+                ...btnToolStyle(color, isFullscreen),
+                background: isFullscreen ? "linear-gradient(135deg, rgba(255,0,113,0.35), rgba(139,92,246,0.35))" : undefined,
+                border: isFullscreen ? `1px solid ${color}` : undefined,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              {isFullscreen ? "⛶ Exit Fullscreen" : "⛶"}
+            </button>
+            <button
+              onClick={() => targetRef && downloadPNG(targetRef, `${safeTitle}.png`)}
+              title="Download PNG"
+              style={btnToolStyle(color, isFullscreen)}
+            >
+              PNG
+            </button>
+            <button
+              onClick={() => targetRef && downloadSVG(targetRef, `${safeTitle}.svg`)}
+              title="Download SVG"
+              style={btnToolStyle(color, isFullscreen)}
+            >
+              SVG
+            </button>
+            {chartData && (
+              <button
+                onClick={() => downloadChartCSV(chartData, `${safeTitle}.csv`)}
+                title="Download Data CSV"
+                style={btnToolStyle(color, isFullscreen)}
+              >
+                CSV
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Chart Canvas with Smooth Scale Transformation */}
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            flexDirection: "column",
+            justifyContent: isFullscreen ? "center" : "flex-start",
+            alignItems: "stretch",
+            width: "100%",
+            height: isFullscreen ? "calc(100vh - 120px)" : "auto",
+            minHeight: isFullscreen ? "calc(100vh - 120px)" : "auto",
+            transform: `scale(${zoom})`,
+            transformOrigin: "center center",
+            transition: "transform 0.15s ease-out",
+          }}
+        >
+          {children}
+        </div>
       </div>
+    </FullscreenContext.Provider>
+  );
+};
+
+const DynamicResponsiveContainer = ({ defaultHeight = 240, children, ...props }) => {
+  const isFullscreen = useContext(FullscreenContext);
+  return (
+    <ResponsiveContainer
+      width="100%"
+      height={isFullscreen ? Math.max(window.innerHeight - 170, 520) : defaultHeight}
+      {...props}
+    >
+      {children}
+    </ResponsiveContainer>
+  );
+};
+
+const DynamicHeatmapTable = ({ correlationMatrix }) => {
+  const isFullscreen = useContext(FullscreenContext);
+  if (!correlationMatrix) return null;
+
+  return (
+    <div style={{
+      overflowX: "auto",
+      overflowY: isFullscreen ? "auto" : "hidden",
+      maxHeight: isFullscreen ? "calc(100vh - 150px)" : 240,
+      width: "100%",
+      display: "flex",
+      justifyContent: "center",
+      alignItems: isFullscreen ? "flex-start" : "center",
+      padding: isFullscreen ? "16px 0" : "4px 0",
+    }}>
+      <table style={{
+        width: isFullscreen ? "95%" : "100%",
+        maxWidth: isFullscreen ? 1200 : "100%",
+        fontSize: isFullscreen ? 13 : 10,
+        borderCollapse: "separate",
+        borderSpacing: isFullscreen ? 6 : 3,
+        textAlign: "center",
+        margin: "0 auto",
+      }}>
+        <thead>
+          <tr>
+            <th style={{ padding: isFullscreen ? 8 : 4 }} />
+            {correlationMatrix.cols.map(col => (
+              <th key={col} style={{
+                padding: isFullscreen ? "10px 14px" : "4px 6px",
+                color: "#ff85be",
+                fontWeight: 800,
+                fontSize: isFullscreen ? 12.5 : 9.5
+              }}>
+                {isFullscreen ? col : (col.length > 7 ? col.slice(0, 6) + "…" : col)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {correlationMatrix.matrix.map(row => (
+            <tr key={row.col}>
+              <td style={{
+                fontWeight: 800,
+                padding: isFullscreen ? "10px 16px" : "4px 6px",
+                color: "#cbd5e1",
+                textAlign: "left",
+                whiteSpace: "nowrap",
+                fontSize: isFullscreen ? 12.5 : 9.5
+              }}>
+                {isFullscreen ? row.col : (row.col.length > 7 ? row.col.slice(0, 6) + "…" : row.col)}
+              </td>
+              {correlationMatrix.cols.map(c2 => {
+                const val = row[c2];
+                const absV = Math.abs(val);
+                const bg = val > 0
+                  ? `rgba(255,0,113,${Math.min(absV * 0.9, 0.85)})`
+                  : `rgba(99,102,241,${Math.min(absV * 0.9, 0.85)})`;
+                return (
+                  <td
+                    key={c2}
+                    title={`${row.col} ↔ ${c2}: ${val}`}
+                    style={{
+                      background: bg,
+                      color: absV > 0.5 ? "#fff" : "#cbd5e1",
+                      padding: isFullscreen ? "16px 12px" : "6px 4px",
+                      borderRadius: isFullscreen ? 8 : 5,
+                      fontWeight: absV > 0.6 ? 800 : 600,
+                      fontSize: isFullscreen ? 14 : 10,
+                      transition: "all 0.15s ease",
+                      cursor: "default",
+                      boxShadow: isFullscreen && absV > 0.5 ? `0 2px 10px ${bg}` : "none",
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.transform = "scale(1.15)"}
+                    onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
+                  >
+                    {val}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 };
 
-const btnToolStyle = (color) => ({
-  padding: "2px 6px",
-  fontSize: 9.5,
-  borderRadius: 4,
+const btnToolStyle = (color, isFullscreen = false) => ({
+  padding: isFullscreen ? "6px 14px" : "2px 6px",
+  fontSize: isFullscreen ? 12 : 9.5,
+  borderRadius: isFullscreen ? 6 : 4,
   background: `${color}14`,
   border: `1px solid ${color}33`,
   color: color,
@@ -793,7 +990,7 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                 {/* Per-class report bar chart */}
                 {isClassification && classReportData.length > 0 && (
                   <ChartContainer title="📊 Per-Class Precision / Recall / F1 (%)" color="#06b6d4" chartRef={chartRef1}>
-                    <ResponsiveContainer width="100%" height={170}>
+                    <DynamicResponsiveContainer defaultHeight={170}>
                       <BarChart data={classReportData} margin={{ top: 4, right: 8, bottom: 16, left: -22 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                         <XAxis dataKey="class" stroke="#475569" fontSize={10} tickLine={false} />
@@ -804,14 +1001,14 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                         <Bar dataKey="recall" name="Recall" fill="url(#barGrad3)" radius={[4, 4, 0, 0]} />
                         <Bar dataKey="f1" name="F1 Score" fill="url(#barGrad1)" radius={[4, 4, 0, 0]} />
                       </BarChart>
-                    </ResponsiveContainer>
+                    </DynamicResponsiveContainer>
                   </ChartContainer>
                 )}
 
                 {/* Regression scatter */}
                 {isRegression && regressionScatterData.length > 0 && (
                   <ChartContainer title="📈 Actual vs Predicted" color="#4ade80" chartRef={chartRef2}>
-                    <ResponsiveContainer width="100%" height={185}>
+                    <DynamicResponsiveContainer defaultHeight={185}>
                       <ScatterChart margin={{ top: 4, right: 8, bottom: 20, left: -10 }}>
                         <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                         <XAxis dataKey="actual" name="Actual" stroke="#475569" fontSize={10} tickLine={false} />
@@ -819,7 +1016,7 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                         <Tooltip content={<CustomTooltip borderColor="#4ade80" />} />
                         <Scatter data={regressionScatterData.slice(0, 150)} fill="#4ade80" opacity={0.75} />
                       </ScatterChart>
-                    </ResponsiveContainer>
+                    </DynamicResponsiveContainer>
                   </ChartContainer>
                 )}
               </div>
@@ -828,7 +1025,7 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
             {/* ══ SCATTER PLOT ══ */}
             {activeTab === "scatter" && (
               <ChartContainer title={`⚬ ${xAxis} vs ${yAxis}`} color="#ff0071" chartRef={chartRef1}>
-                <ResponsiveContainer width="100%" height={240}>
+                <DynamicResponsiveContainer defaultHeight={240}>
                   <ScatterChart margin={{ top: 8, right: 12, bottom: 20, left: -12 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                     <XAxis dataKey={xAxis} name={xAxis} stroke="#475569" fontSize={10} tickLine={false} />
@@ -836,14 +1033,14 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                     <Tooltip content={<CustomTooltip borderColor="#ff0071" />} />
                     <Scatter data={chartData} fill="url(#scatterGrad)" opacity={0.8} />
                   </ScatterChart>
-                </ResponsiveContainer>
+                </DynamicResponsiveContainer>
               </ChartContainer>
             )}
 
             {/* ══ HISTOGRAM ══ */}
             {activeTab === "histogram" && (
               <ChartContainer title={`📊 Distribution — ${histCol || xAxis}`} color="#8b5cf6" chartRef={chartRef1}>
-                <ResponsiveContainer width="100%" height={240}>
+                <DynamicResponsiveContainer defaultHeight={240}>
                   <BarChart data={histogramData} margin={{ top: 8, right: 12, bottom: 28, left: -12 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                     <XAxis dataKey="bin" stroke="#475569" fontSize={9} interval={0} angle={-20} textAnchor="end" tickLine={false} />
@@ -851,14 +1048,14 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                     <Tooltip content={<CustomTooltip borderColor="#8b5cf6" />} />
                     <Bar dataKey="count" name="Count" fill="url(#barGrad3)" radius={[5, 5, 0, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
+                </DynamicResponsiveContainer>
               </ChartContainer>
             )}
 
             {/* ══ LINE CHART ══ */}
             {activeTab === "line" && (
               <ChartContainer title={`📈 ${yAxis} over ${xAxis}`} color="#06b6d4" chartRef={chartRef1}>
-                <ResponsiveContainer width="100%" height={240}>
+                <DynamicResponsiveContainer defaultHeight={240}>
                   <AreaChart data={chartData} margin={{ top: 8, right: 12, bottom: 20, left: -12 }}>
                     <defs>
                       <linearGradient id="areaFill" x1="0" y1="0" x2="0" y2="1">
@@ -872,14 +1069,14 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                     <Tooltip content={<CustomTooltip borderColor="#06b6d4" />} />
                     <Area type="monotone" dataKey={yAxis} stroke="#06b6d4" strokeWidth={2.5} fill="url(#areaFill)" dot={false} />
                   </AreaChart>
-                </ResponsiveContainer>
+                </DynamicResponsiveContainer>
               </ChartContainer>
             )}
 
             {/* ══ BAR CHART ══ */}
             {activeTab === "bar" && (
               <ChartContainer title={`▊ ${yAxis} by ${xAxis}`} color="#ff0071" chartRef={chartRef1}>
-                <ResponsiveContainer width="100%" height={240}>
+                <DynamicResponsiveContainer defaultHeight={240}>
                   <BarChart data={chartData.slice(0, 30)} margin={{ top: 8, right: 12, bottom: 20, left: -12 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
                     <XAxis dataKey={xAxis} stroke="#475569" fontSize={10} tickLine={false} />
@@ -887,55 +1084,14 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                     <Tooltip content={<CustomTooltip borderColor="#ff0071" />} />
                     <Bar dataKey={yAxis} fill="url(#barGrad1)" radius={[5, 5, 0, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
+                </DynamicResponsiveContainer>
               </ChartContainer>
             )}
 
             {/* ══ HEATMAP ══ */}
             {activeTab === "heatmap" && correlationMatrix && (
               <ChartContainer title="🔥 Correlation Heatmap" color="#ff85be" chartRef={chartRef1}>
-                <div style={{ overflowX: "auto", maxHeight: 240 }}>
-                  <table style={{ width: "100%", fontSize: 10, borderCollapse: "separate", borderSpacing: 3, textAlign: "center" }}>
-                    <thead>
-                      <tr>
-                        <th style={{ padding: 4 }} />
-                        {correlationMatrix.cols.map(col => (
-                          <th key={col} style={{ padding: "4px 6px", color: "#ff85be", fontWeight: 700, fontSize: 9.5 }}>
-                            {col.length > 7 ? col.slice(0, 6) + "…" : col}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {correlationMatrix.matrix.map(row => (
-                        <tr key={row.col}>
-                          <td style={{ fontWeight: 700, padding: "4px 6px", color: "#cbd5e1", textAlign: "left", whiteSpace: "nowrap", fontSize: 9.5 }}>
-                            {row.col.length > 7 ? row.col.slice(0, 6) + "…" : row.col}
-                          </td>
-                          {correlationMatrix.cols.map(c2 => {
-                            const val = row[c2];
-                            const absV = Math.abs(val);
-                            const bg = val > 0
-                              ? `rgba(255,0,113,${Math.min(absV * 0.9, 0.85)})`
-                              : `rgba(99,102,241,${Math.min(absV * 0.9, 0.85)})`;
-                            return (
-                              <td key={c2} title={`${row.col} ↔ ${c2}: ${val}`} style={{
-                                background: bg, color: absV > 0.5 ? "#fff" : "#94a3b8",
-                                padding: "6px 4px", borderRadius: 5, fontWeight: absV > 0.6 ? 800 : 500,
-                                fontSize: 10, transition: "transform 0.15s", cursor: "default",
-                              }}
-                                onMouseEnter={e => e.currentTarget.style.transform = "scale(1.15)"}
-                                onMouseLeave={e => e.currentTarget.style.transform = "scale(1)"}
-                              >
-                                {val}
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <DynamicHeatmapTable correlationMatrix={correlationMatrix} />
               </ChartContainer>
             )}
 
