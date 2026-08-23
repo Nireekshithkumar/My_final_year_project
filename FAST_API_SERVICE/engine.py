@@ -8,8 +8,11 @@ from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
 from sklearn.ensemble import (
     RandomForestClassifier, RandomForestRegressor,
     GradientBoostingClassifier, GradientBoostingRegressor,
-    AdaBoostClassifier, BaggingClassifier,
-    ExtraTreesClassifier, ExtraTreesRegressor
+    AdaBoostClassifier, AdaBoostRegressor,
+    BaggingClassifier, BaggingRegressor,
+    ExtraTreesClassifier, ExtraTreesRegressor,
+    VotingClassifier, VotingRegressor,
+    StackingClassifier, StackingRegressor
 )
 from sklearn.svm import SVC, SVR
 from sklearn.neighbors import KNeighborsClassifier, KNeighborsRegressor
@@ -20,21 +23,23 @@ from sklearn.preprocessing import (
     StandardScaler, MinMaxScaler, RobustScaler, MaxAbsScaler, Normalizer, LabelEncoder
 )
 from sklearn.feature_extraction.text import TfidfVectorizer, CountVectorizer
-from sklearn.model_selection import train_test_split, GridSearchCV, RandomizedSearchCV
+from sklearn.impute import SimpleImputer, KNNImputer
+from sklearn.feature_selection import SelectKBest, f_classif, f_regression, VarianceThreshold
+from sklearn.model_selection import (
+    train_test_split, GridSearchCV, RandomizedSearchCV, KFold, StratifiedKFold, cross_val_score
+)
 from sklearn.metrics import (
     accuracy_score, mean_squared_error, mean_absolute_error, r2_score,
     explained_variance_score, precision_score, recall_score, f1_score,
-    classification_report, confusion_matrix, roc_curve
+    classification_report, confusion_matrix, roc_curve, precision_recall_curve, auc
 )
+from sklearn.inspection import permutation_importance
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
 import logging
-
-
 import pickle
 import base64
-
 import io
 
 logger = logging.getLogger(__name__)
@@ -62,14 +67,16 @@ ALGORITHM_REGISTRY = {
     "GradientBoostingClassifier": GradientBoostingClassifier,
     "AdaBoostClassifier": AdaBoostClassifier,
     "BaggingClassifier": BaggingClassifier,
+    "ExtraTreesClassifier": ExtraTreesClassifier,
     "SVC": SVC,
     "KNeighborsClassifier": KNeighborsClassifier,
     "GaussianNB": GaussianNB,
     "MultinomialNB": MultinomialNB,
-    "ExtraTreesClassifier": ExtraTreesClassifier,
     "Perceptron": Perceptron,
     "SGDClassifier": SGDClassifier,
     "PassiveAggressiveClassifier": PassiveAggressiveClassifier,
+    "VotingClassifier": VotingClassifier,
+    "StackingClassifier": StackingClassifier,
 
     # Classical ML - Regression
     "LinearRegression": LinearRegression,
@@ -79,9 +86,13 @@ ALGORITHM_REGISTRY = {
     "DecisionTreeRegressor": DecisionTreeRegressor,
     "RandomForestRegressor": RandomForestRegressor,
     "GradientBoostingRegressor": GradientBoostingRegressor,
+    "AdaBoostRegressor": AdaBoostRegressor,
+    "BaggingRegressor": BaggingRegressor,
+    "ExtraTreesRegressor": ExtraTreesRegressor,
     "SVR": SVR,
     "KNeighborsRegressor": KNeighborsRegressor,
-    "ExtraTreesRegressor": ExtraTreesRegressor,
+    "VotingRegressor": VotingRegressor,
+    "StackingRegressor": StackingRegressor,
 
     # Clustering
     "KMeans": KMeans,
@@ -100,6 +111,10 @@ ALGORITHM_REGISTRY = {
     "LabelEncoder": LabelEncoder,
     "TfidfVectorizer": TfidfVectorizer,
     "CountVectorizer": CountVectorizer,
+    "Imputer": SimpleImputer,
+    "OutlierHandler": None,
+    "FeatureSelector": None,
+    "ClassImbalance": None,
 }
 
 if HAS_XGB:
@@ -110,8 +125,7 @@ if HAS_LGBM:
     ALGORITHM_REGISTRY["LGBMRegressor"] = LGBMRegressor
 
 
-
-# ─── EXECUTOR ─────────────────────────────────────────────────────────────────
+# ─── EXECUTOR ROUTER ──────────────────────────────────────────────────────────
 
 def execute_algorithm(algorithm_type: str, params: dict, input_data: dict) -> dict:
     """
@@ -119,17 +133,216 @@ def execute_algorithm(algorithm_type: str, params: dict, input_data: dict) -> di
     """
     if algorithm_type in DL_ALGORITHMS:
         return execute_dl(algorithm_type, params, input_data)
+    elif algorithm_type == "AutoML":
+        return execute_automl(params, input_data)
+    elif algorithm_type == "ModelComparison":
+        return execute_model_comparison(params, input_data)
+    elif algorithm_type == "CrossValidation":
+        return execute_cross_validation(params, input_data)
+    elif algorithm_type == "Explainability" or algorithm_type == "FeatureImportance":
+        return execute_explainability(params, input_data)
+    elif algorithm_type == "WhatIf":
+        return execute_what_if(params, input_data)
     elif algorithm_type in ALGORITHM_REGISTRY or algorithm_type == "HyperparamTuning":
         return execute_ml(algorithm_type, params, input_data)
     else:
-        raise ValueError(f"Unknown algorithm: {algorithm_type}")
+        raise ValueError(f"Unknown algorithm or task type: {algorithm_type}")
+
+
+# ─── PREPROCESSING EXECUTORS ──────────────────────────────────────────────────
+
+def run_imputer_node(params: dict, input_data: dict) -> dict:
+    strategy = params.get('strategy', 'mean')  # mean, median, most_frequent, constant, drop
+    fill_value = params.get('fill_value', 0)
+    is_split = "X_train" in input_data and "X_test" in input_data
+
+    if is_split:
+        X_train = np.array(input_data['X_train'])
+        X_test = np.array(input_data['X_test'])
+        cols = input_data.get('columns', [])
+
+        if strategy == 'drop':
+            # drop rows with nan
+            train_mask = ~pd.DataFrame(X_train).isnull().any(axis=1)
+            test_mask = ~pd.DataFrame(X_test).isnull().any(axis=1)
+            X_train_imp = X_train[train_mask]
+            X_test_imp = X_test[test_mask]
+            y_train = np.array(input_data['y_train'])[train_mask].tolist() if input_data.get('y_train') else []
+            y_test = np.array(input_data['y_test'])[test_mask].tolist() if input_data.get('y_test') else []
+        else:
+            imputer = SimpleImputer(strategy=strategy if strategy != 'constant' else 'constant', fill_value=fill_value if strategy == 'constant' else None)
+            X_train_imp = imputer.fit_transform(X_train)
+            X_test_imp = imputer.transform(X_test)
+            y_train = input_data.get('y_train')
+            y_test = input_data.get('y_test')
+
+        return {
+            "X_train": X_train_imp.tolist() if hasattr(X_train_imp, 'tolist') else list(X_train_imp),
+            "X_test": X_test_imp.tolist() if hasattr(X_test_imp, 'tolist') else list(X_test_imp),
+            "y_train": y_train,
+            "y_test": y_test,
+            "columns": cols,
+            "imputation_strategy": strategy
+        }
+    else:
+        df = pd.DataFrame(input_data.get('dataframe', {}))
+        if strategy == 'drop':
+            df = df.dropna()
+        elif strategy in ('mean', 'median'):
+            for c in df.select_dtypes(include=[np.number]).columns:
+                val = df[c].mean() if strategy == 'mean' else df[c].median()
+                df[c] = df[c].fillna(val)
+        elif strategy == 'most_frequent':
+            for c in df.columns:
+                mode_vals = df[c].mode()
+                if not mode_vals.empty:
+                    df[c] = df[c].fillna(mode_vals[0])
+        elif strategy == 'constant':
+            df = df.fillna(fill_value)
+
+        return {
+            "dataframe": df.to_dict(orient='list'),
+            "columns": list(df.columns),
+            "imputation_strategy": strategy
+        }
+
+
+def run_outlier_handler_node(params: dict, input_data: dict) -> dict:
+    method = params.get('method', 'iqr_clip')  # iqr_clip, iqr_drop, zscore_clip
+    threshold = float(params.get('threshold', 1.5))
+    is_split = "X_train" in input_data and "X_test" in input_data
+
+    def handle_arr(X_arr):
+        df_num = pd.DataFrame(X_arr)
+        for col in df_num.columns:
+            s = pd.to_numeric(df_num[col], errors='coerce')
+            if s.notnull().sum() > 4:
+                q1 = s.quantile(0.25)
+                q3 = s.quantile(0.75)
+                iqr = q3 - q1
+                lower = q1 - threshold * iqr
+                upper = q3 + threshold * iqr
+                df_num[col] = s.clip(lower=lower, upper=upper)
+        return df_num.values
+
+    if is_split:
+        X_tr = handle_arr(input_data['X_train'])
+        X_te = handle_arr(input_data['X_test'])
+        return {
+            "X_train": X_tr.tolist(),
+            "X_test": X_te.tolist(),
+            "y_train": input_data.get('y_train'),
+            "y_test": input_data.get('y_test'),
+            "columns": input_data.get('columns', []),
+            "outlier_method": method
+        }
+    else:
+        df = pd.DataFrame(input_data.get('dataframe', {}))
+        for col in df.select_dtypes(include=[np.number]).columns:
+            s = df[col]
+            q1 = s.quantile(0.25)
+            q3 = s.quantile(0.75)
+            iqr = q3 - q1
+            lower = q1 - threshold * iqr
+            upper = q3 + threshold * iqr
+            df[col] = s.clip(lower=lower, upper=upper)
+        return {
+            "dataframe": df.to_dict(orient='list'),
+            "columns": list(df.columns),
+            "outlier_method": method
+        }
+
+
+def run_feature_selector_node(params: dict, input_data: dict) -> dict:
+    k = int(params.get('k', 5))
+    method = params.get('method', 'SelectKBest')
+    is_split = "X_train" in input_data and "X_test" in input_data
+
+    if is_split:
+        X_train = np.array(input_data['X_train'], dtype=float)
+        X_test = np.array(input_data['X_test'], dtype=float)
+        y_train = np.array(input_data['y_train'])
+        cols = input_data.get('columns', [f"col_{i}" for i in range(X_train.shape[1])])
+
+        actual_k = min(k, X_train.shape[1])
+        is_regression = any(isinstance(v, float) and not v.is_integer() for v in y_train[:20] if v is not None)
+        score_func = f_regression if is_regression else f_classif
+
+        selector = SelectKBest(score_func=score_func, k=actual_k)
+        X_tr_sel = selector.fit_transform(X_train, y_train)
+        X_te_sel = selector.transform(X_test)
+
+        mask = selector.get_support()
+        selected_cols = [cols[i] for i, m in enumerate(mask) if m]
+
+        return {
+            "X_train": X_tr_sel.tolist(),
+            "X_test": X_te_sel.tolist(),
+            "y_train": input_data.get('y_train'),
+            "y_test": input_data.get('y_test'),
+            "columns": selected_cols,
+            "selected_features": selected_cols,
+            "feature_scores": dict(zip(cols, selector.scores_.tolist())) if hasattr(selector, 'scores_') else {}
+        }
+    else:
+        return input_data
+
+
+def run_class_imbalance_node(params: dict, input_data: dict) -> dict:
+    method = params.get('method', 'RandomOverSampler')  # RandomOverSampler, RandomUnderSampler
+    is_split = "X_train" in input_data and "X_test" in input_data
+
+    if not is_split:
+        return input_data
+
+    X_train = np.array(input_data['X_train'], dtype=float)
+    y_train = np.array(input_data['y_train'])
+
+    classes, counts = np.unique(y_train, return_counts=True)
+    if len(classes) < 2:
+        return input_data
+
+    max_count = max(counts)
+    indices_by_class = {c: np.where(y_train == c)[0] for c in classes}
+
+    new_indices = []
+    if method == 'RandomUnderSampler':
+        min_count = min(counts)
+        for c in classes:
+            chosen = np.random.choice(indices_by_class[c], size=min_count, replace=False)
+            new_indices.extend(chosen)
+    else:  # RandomOverSampler / default
+        for c in classes:
+            chosen = np.random.choice(indices_by_class[c], size=max_count, replace=True)
+            new_indices.extend(chosen)
+
+    np.random.shuffle(new_indices)
+    return {
+        "X_train": X_train[new_indices].tolist(),
+        "X_test": input_data['X_test'],
+        "y_train": y_train[new_indices].tolist(),
+        "y_test": input_data['y_test'],
+        "columns": input_data.get('columns', []),
+        "imbalance_handled": True
+    }
 
 
 # ─── ML EXECUTOR ──────────────────────────────────────────────────────────────
+
 def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
-    params = dict(params)  # shallow copy
+    params = dict(params)
     include_plots = params.pop('include_plots', False)
     is_split = "X_train" in input_data and "X_test" in input_data
+
+    # Dispatch custom preprocessing nodes
+    if algorithm_type == "Imputer":
+        return run_imputer_node(params, input_data)
+    elif algorithm_type == "OutlierHandler":
+        return run_outlier_handler_node(params, input_data)
+    elif algorithm_type == "FeatureSelector":
+        return run_feature_selector_node(params, input_data)
+    elif algorithm_type == "ClassImbalance":
+        return run_class_imbalance_node(params, input_data)
 
     # ── Text Vectorization ──
     if algorithm_type in ["TfidfVectorizer", "CountVectorizer"]:
@@ -150,12 +363,12 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
             vec = vec_class(max_features=max_feat)
             X_vec = vec.fit_transform(text_series).toarray()
             feature_names = vec.get_feature_names_out().tolist()
-            
+
             df = df.drop(columns=[col_name])
             for i, fname in enumerate(feature_names):
                 df[f"{col_name}_{fname}"] = X_vec[:, i]
-            
-            result = {
+
+            return {
                 "dataframe": df.to_dict(orient='list'),
                 "columns": list(df.columns),
                 "vectorizer_params": {
@@ -165,36 +378,35 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
                     "idf": dict(zip(vec.get_feature_names_out(), vec.idf_.tolist())) if hasattr(vec, 'idf_') else {},
                 }
             }
-            return result
         elif is_split and features and all_columns:
             col_name = features[0]
             col_idx = all_columns.index(col_name) if col_name in all_columns else 0
-            
+
             X_train = input_data["X_train"]
             X_test = input_data["X_test"]
-            
+
             train_text = [str(row[col_idx]) for row in X_train]
             test_text = [str(row[col_idx]) for row in X_test]
-            
+
             vec = vec_class(max_features=max_feat)
             train_vec = vec.fit_transform(train_text).toarray()
             test_vec = vec.transform(test_text).toarray()
-            
+
             feature_names = [f"{col_name}_{fn}" for fn in vec.get_feature_names_out().tolist()]
-            
+
             new_X_train = []
             for idx, row in enumerate(X_train):
                 new_row = [v for i, v in enumerate(row) if i != col_idx] + train_vec[idx].tolist()
                 new_X_train.append(new_row)
-                
+
             new_X_test = []
             for idx, row in enumerate(X_test):
                 new_row = [v for i, v in enumerate(row) if i != col_idx] + test_vec[idx].tolist()
                 new_X_test.append(new_row)
-                
+
             new_columns = [c for i, c in enumerate(all_columns) if i != col_idx] + feature_names
-            
-            result = {
+
+            return {
                 "X_train": new_X_train,
                 "X_test": new_X_test,
                 "y_train": input_data.get("y_train"),
@@ -203,23 +415,6 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
                 "vectorizer_params": {
                     "method": "TF-IDF" if algorithm_type == "TfidfVectorizer" else "Count",
                     "features": [col_name],
-                    "vocabulary": vec.vocabulary_,
-                    "idf": dict(zip(vec.get_feature_names_out(), vec.idf_.tolist())) if hasattr(vec, 'idf_') else {},
-                }
-            }
-            return result
-        else:
-            text_series = [str(x) for x in input_data.get('X', [])]
-            vec = vec_class(max_features=max_feat)
-            X_vec = vec.fit_transform(text_series).toarray()
-            feature_names = vec.get_feature_names_out().tolist()
-            return {
-                "X": X_vec.tolist(),
-                "columns": feature_names,
-                "y": input_data.get('y'),
-                "vectorizer_params": {
-                    "method": "TF-IDF" if algorithm_type == "TfidfVectorizer" else "Count",
-                    "features": [],
                     "vocabulary": vec.vocabulary_,
                     "idf": dict(zip(vec.get_feature_names_out(), vec.idf_.tolist())) if hasattr(vec, 'idf_') else {},
                 }
@@ -230,141 +425,38 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
         method = params.get('method', 'Word2Vec')
         features = params.get('features', [])
         all_columns = input_data.get('columns', [])
+        col_name = features[0] if features else (all_columns[0] if all_columns else 'text')
 
-        if not features and all_columns:
-            features = [all_columns[0]]
-        if not features:
-            raise ValueError("No text features selected for Embeddings node.")
-        col_name = features[0]
-
-        def compute_embeddings(texts, method_name):
-            if method_name == "SentenceTransformers":
-                try:
-                    from sentence_transformers import SentenceTransformer
-                    m = SentenceTransformer('all-MiniLM-L6-v2')
-                    return m.encode(texts).tolist(), {"method": "SentenceTransformers", "model_name": "all-MiniLM-L6-v2"}
-                except ImportError:
-                    pass
-            if method_name == "Word2Vec":
-                try:
-                    from gensim.models import Word2Vec
-                    tokenized = [t.lower().split() for t in texts]
-                    w2v = Word2Vec(sentences=tokenized, vector_size=50, window=5, min_count=1, workers=1)
-                    embeddings = []
-                    for t in tokenized:
-                        vecs = [w2v.wv[w] for w in t if w in w2v.wv]
-                        if vecs:
-                            embeddings.append(np.mean(vecs, axis=0).tolist())
-                        else:
-                            embeddings.append(np.zeros(50).tolist())
-                    return embeddings, {
-                        "method": "Word2Vec",
-                        "vectors": {w: w2v.wv[w].tolist() for w in w2v.wv.index_to_key}
-                    }
-                except ImportError:
-                    pass
-            
-            embeddings = []
-            vector_size = 50
+        def compute_simple_embeddings(texts):
+            vecs = []
             for t in texts:
-                words = t.lower().split()
+                words = str(t).lower().split()
                 if not words:
-                    embeddings.append(np.zeros(vector_size).tolist())
-                    continue
-                vecs = []
-                for w in words:
-                    state = hash(w)
-                    np.random.seed(state % (2**32 - 1))
-                    vecs.append(np.random.randn(vector_size))
-                embeddings.append(np.mean(vecs, axis=0).tolist())
-            return embeddings, {
-                "method": "FallbackHash",
-                "vector_size": vector_size
-            }
-
-        if "dataframe" in input_data:
-            df = pd.DataFrame(input_data["dataframe"])
-            text_series = df[col_name].fillna("").astype(str).tolist()
-            embeddings_list, emb_params = compute_embeddings(text_series, method)
-            
-            df = df.drop(columns=[col_name])
-            vector_size = len(embeddings_list[0]) if embeddings_list else 50
-            for i in range(vector_size):
-                df[f"{col_name}_emb_{i}"] = [row[i] for row in embeddings_list]
-                
-            return {
-                "dataframe": df.to_dict(orient='list'),
-                "columns": list(df.columns),
-                "encoder_params": {
-                    "method": emb_params["method"],
-                    "features": [col_name],
-                    **emb_params
-                }
-            }
-        elif is_split and all_columns:
-            col_idx = all_columns.index(col_name)
-            X_train = input_data["X_train"]
-            X_test = input_data["X_test"]
-            train_texts = [str(row[col_idx]) for row in X_train]
-            test_texts = [str(row[col_idx]) for row in X_test]
-            
-            train_emb, emb_params = compute_embeddings(train_texts, method)
-            
-            if emb_params["method"] == "SentenceTransformers":
-                from sentence_transformers import SentenceTransformer
-                m = SentenceTransformer(emb_params["model_name"])
-                test_emb = m.encode(test_texts).tolist()
-            elif emb_params["method"] == "Word2Vec":
-                vectors = emb_params["vectors"]
-                test_emb = []
-                for t in test_texts:
-                    words = t.lower().split()
-                    vecs = [vectors[w] for w in words if w in vectors]
-                    if vecs:
-                        test_emb.append(np.mean(vecs, axis=0).tolist())
-                    else:
-                        test_emb.append(np.zeros(50).tolist())
-            else: # FallbackHash
-                vector_size = emb_params["vector_size"]
-                test_emb = []
-                for t in test_texts:
-                    words = t.lower().split()
-                    vecs = []
+                    vecs.append([0.0] * 20)
+                else:
+                    v = np.zeros(20)
                     for w in words:
-                        state = hash(w)
-                        np.random.seed(state % (2**32 - 1))
-                        vecs.append(np.random.randn(vector_size))
-                    if vecs:
-                        test_emb.append(np.mean(vecs, axis=0).tolist())
-                    else:
-                        test_emb.append(np.zeros(vector_size).tolist())
-                        
-            vector_size = len(train_emb[0]) if train_emb else 50
-            feature_names = [f"{col_name}_emb_{i}" for i in range(vector_size)]
-            
-            new_X_train = []
-            for idx, row in enumerate(X_train):
-                new_row = [v for i, v in enumerate(row) if i != col_idx] + train_emb[idx]
-                new_X_train.append(new_row)
-                
-            new_X_test = []
-            for idx, row in enumerate(X_test):
-                new_row = [v for i, v in enumerate(row) if i != col_idx] + test_emb[idx]
-                new_X_test.append(new_row)
-                
-            new_columns = [c for i, c in enumerate(all_columns) if i != col_idx] + feature_names
-            
+                        np.random.seed(abs(hash(w)) % (2**31))
+                        v += np.random.randn(20)
+                    vecs.append((v / max(len(words), 1)).tolist())
+            return vecs
+
+        if is_split and all_columns:
+            col_idx = all_columns.index(col_name) if col_name in all_columns else 0
+            train_emb = compute_simple_embeddings([r[col_idx] for r in input_data["X_train"]])
+            test_emb = compute_simple_embeddings([r[col_idx] for r in input_data["X_test"]])
+            emb_cols = [f"{col_name}_emb_{i}" for i in range(20)]
+
+            new_tr = [([v for i, v in enumerate(r) if i != col_idx] + train_emb[idx]) for idx, r in enumerate(input_data["X_train"])]
+            new_te = [([v for i, v in enumerate(r) if i != col_idx] + test_emb[idx]) for idx, r in enumerate(input_data["X_test"])]
+            new_cols = [c for i, c in enumerate(all_columns) if i != col_idx] + emb_cols
+
             return {
-                "X_train": new_X_train,
-                "X_test": new_X_test,
+                "X_train": new_tr,
+                "X_test": new_te,
                 "y_train": input_data.get("y_train"),
                 "y_test": input_data.get("y_test"),
-                "columns": new_columns,
-                "encoder_params": {
-                    "method": emb_params["method"],
-                    "features": [col_name],
-                    **emb_params
-                }
+                "columns": new_cols,
             }
 
     # ── Hyperparameter Tuning ──
@@ -385,7 +477,7 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
 
         if not param_grid:
             if sub_algo in ["RandomForestClassifier", "RandomForestRegressor"]:
-                param_grid = {"n_estimators": [10, 50], "max_depth": [3, 5, None]}
+                param_grid = {"n_estimators": [10, 50, 100], "max_depth": [3, 5, None]}
             elif sub_algo in ["LogisticRegression"]:
                 param_grid = {"C": [0.1, 1.0, 10.0]}
             elif sub_algo in ["SVC"]:
@@ -394,7 +486,7 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
                 param_grid = {}
 
         base_clf = ALGORITHM_REGISTRY.get(sub_algo, RandomForestClassifier)()
-        
+
         if is_split:
             X_train = np.array(input_data['X_train'], dtype=float)
             X_test = np.array(input_data['X_test'], dtype=float)
@@ -403,9 +495,7 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
         else:
             X = np.array(input_data['X'], dtype=float)
             y = np.array(input_data['y'])
-            X_train, X_test, y_train, y_test = train_test_split(
-                X, y, test_size=0.2, random_state=42
-            )
+            X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
 
         if search_method == 'RandomSearch':
             search = RandomizedSearchCV(base_clf, param_distributions=param_grid, cv=cv_folds, n_iter=5, random_state=42)
@@ -415,16 +505,15 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
         search.fit(X_train, y_train)
         best_model = search.best_estimator_
         predictions = best_model.predict(X_test)
+        model_b64 = base64.b64encode(pickle.dumps(best_model)).decode('utf-8')
 
-        model_bytes = pickle.dumps(best_model)
-        model_b64 = base64.b64encode(model_bytes).decode('utf-8')
-
-        if sub_algo.endswith("Classifier") or sub_algo in ["SVC", "LogisticRegression", "GaussianNB", "MultinomialNB"]:
-            cm = confusion_matrix(y_test, predictions).tolist()
+        is_classifier = sub_algo.endswith("Classifier") or sub_algo in ["SVC", "LogisticRegression", "GaussianNB", "MultinomialNB", "Perceptron", "SGDClassifier"]
+        if is_classifier:
             acc = float(accuracy_score(y_test, predictions))
             prec = float(precision_score(y_test, predictions, average='weighted', zero_division=0))
             rec = float(recall_score(y_test, predictions, average='weighted', zero_division=0))
             f1_val = float(f1_score(y_test, predictions, average='weighted', zero_division=0))
+            cm = confusion_matrix(y_test, predictions).tolist()
             report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
             return {
                 "best_params": search.best_params_,
@@ -478,15 +567,13 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
                 "y_test": y_test.tolist(),
             }
 
-    # Custom column-selection params aren't real sklearn constructor args — extract them first
+    # Extract non-constructor params
     selected_columns = params.pop('columns', None)
     apply_all = params.pop('apply_all', False)
-    
-    # split-related params pulled out before passing the rest to the model constructor
     test_size = params.pop('test_size', 0.2)
     stratify_flag = params.pop('stratify', False)
 
-    # LogisticRegression parameter validation and solver auto-selection
+    # Specific model constructor adjustments
     if algorithm_type == "LogisticRegression":
         penalty = params.get('penalty')
         solver = params.get('solver')
@@ -500,8 +587,23 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
             if 'l1_ratio' not in params:
                 params['l1_ratio'] = 0.5
         elif penalty == 'none' or penalty is None:
-            # None penalty in modern scikit-learn
             params['penalty'] = None
+
+    elif algorithm_type in ["VotingClassifier", "StackingClassifier"]:
+        if "estimators" not in params:
+            params["estimators"] = [
+                ("lr", LogisticRegression(max_iter=500)),
+                ("rf", RandomForestClassifier(n_estimators=50, random_state=42)),
+                ("gb", GradientBoostingClassifier(n_estimators=50, random_state=42))
+            ]
+
+    elif algorithm_type in ["VotingRegressor", "StackingRegressor"]:
+        if "estimators" not in params:
+            params["estimators"] = [
+                ("lr", LinearRegression()),
+                ("rf", RandomForestRegressor(n_estimators=50, random_state=42)),
+                ("gb", GradientBoostingRegressor(n_estimators=50, random_state=42))
+            ]
 
     clf_class = ALGORITHM_REGISTRY[algorithm_type]
     try:
@@ -511,35 +613,14 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
     except Exception as exc:
         raise ValueError(f"{algorithm_type} initialization error: {str(exc)}") from exc
 
-    # Preprocessing (Scalers)
+    # Scalers
     if algorithm_type in ["StandardScaler", "MinMaxScaler", "RobustScaler", "MaxAbsScaler", "Normalizer"]:
         all_columns = input_data.get('columns', [])
-        
         if is_split:
-            X_train = np.array(input_data['X_train'])
-            X_test = np.array(input_data['X_test'])
-            try:
-                X_train_arr = np.array(X_train, dtype=float)
-                X_test_arr = np.array(X_test, dtype=float)
-            except (ValueError, TypeError):
-                raise ValueError(f"Non-numeric values found in input dataset for {algorithm_type}. Please run an Encoder or Vectorizer node first.")
-        else:
-            X = input_data.get('X', [])
-            try:
-                X_arr = np.array(X, dtype=float)
-            except (ValueError, TypeError):
-                raise ValueError(f"Non-numeric values found in input dataset for {algorithm_type}. Please run an Encoder or Vectorizer node first.")
+            X_train_arr = np.array(input_data['X_train'], dtype=float)
+            X_test_arr = np.array(input_data['X_test'], dtype=float)
+            col_indices = [all_columns.index(c) for c in selected_columns if c in all_columns] if (not apply_all and selected_columns and all_columns) else list(range(X_train_arr.shape[1]))
 
-        if not apply_all and selected_columns and all_columns:
-            col_indices = [all_columns.index(c) for c in selected_columns if c in all_columns]
-        else:
-            if is_split:
-                col_indices = list(range(X_train_arr.shape[1]))
-            else:
-                col_indices = list(range(X_arr.shape[1]))
-
-        # Fit model on training split only, transform both
-        if is_split:
             model.fit(X_train_arr[:, col_indices])
             X_train_arr[:, col_indices] = model.transform(X_train_arr[:, col_indices])
             X_test_arr[:, col_indices] = model.transform(X_test_arr[:, col_indices])
@@ -551,6 +632,8 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
                 "columns": all_columns,
             }
         else:
+            X_arr = np.array(input_data.get('X', []), dtype=float)
+            col_indices = list(range(X_arr.shape[1]))
             model.fit(X_arr[:, col_indices])
             X_arr[:, col_indices] = model.transform(X_arr[:, col_indices])
             result = {
@@ -559,10 +642,7 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
                 "columns": all_columns,
             }
 
-        # Export params
-        scaler_dict = {
-            "columns": selected_columns or all_columns if not apply_all else all_columns,
-        }
+        scaler_dict = {"columns": selected_columns or all_columns if not apply_all else all_columns}
         if algorithm_type == "StandardScaler":
             scaler_dict["mean"] = model.mean_.tolist() if hasattr(model, 'mean_') else []
             scaler_dict["scale"] = model.scale_.tolist() if hasattr(model, 'scale_') else []
@@ -576,79 +656,59 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
             scaler_dict["scale"] = model.scale_max_abs_.tolist() if hasattr(model, 'scale_max_abs_') else []
         elif algorithm_type == "Normalizer":
             scaler_dict["norm"] = params.get('norm', 'l2')
-            
+
         result["scaler_params"] = scaler_dict
         return result
 
-    # clustering / unsupervised
+    # Clustering
     if algorithm_type in ["KMeans", "DBSCAN", "AgglomerativeClustering"]:
-        X = np.array(input_data['X'])
+        X = np.array(input_data.get('X', input_data.get('X_train', [])), dtype=float)
         labels = model.fit_predict(X)
-        return {"labels": labels.tolist()}
+        return {"labels": labels.tolist(), "cluster_counts": dict(pd.Series(labels).value_counts())}
 
+    # PCA
     if algorithm_type == "PCA":
         if is_split:
-            X_train = np.array(input_data['X_train'])
-            X_test = np.array(input_data['X_test'])
+            X_train = np.array(input_data['X_train'], dtype=float)
+            X_test = np.array(input_data['X_test'], dtype=float)
             model.fit(X_train)
-            result = {
+            return {
                 "X_train": model.transform(X_train).tolist(),
                 "X_test": model.transform(X_test).tolist(),
                 "y_train": input_data.get('y_train'),
                 "y_test": input_data.get('y_test'),
-                "explained_variance_ratio": model.explained_variance_ratio_.tolist()
+                "explained_variance_ratio": model.explained_variance_ratio_.tolist(),
             }
-            return result
         else:
-            X = np.array(input_data['X'])
-            transformed = model.fit_transform(X)
+            X = np.array(input_data['X'], dtype=float)
             return {
-                "transformed": transformed.tolist(),
-                "explained_variance_ratio": model.explained_variance_ratio_.tolist()
+                "transformed": model.fit_transform(X).tolist(),
+                "explained_variance_ratio": model.explained_variance_ratio_.tolist(),
             }
 
-    if algorithm_type == "LabelEncoder":
-        y = np.array(input_data['y']) if 'y' in input_data else None
-        encoded = model.fit_transform(y)
-        return {"encoded": encoded.tolist(), "classes": model.classes_.tolist()}
-
-    # Supervised ML Models fitting block
+    # Supervised Model Training
     if is_split:
-        try:
-            X_train = np.array(input_data['X_train'], dtype=float)
-            X_test = np.array(input_data['X_test'], dtype=float)
-        except (ValueError, TypeError):
-            raise ValueError(f"Non-numeric features found in input data for {algorithm_type}. Encode or vectorise string/categorical features prior to model fitting.")
+        X_train = np.array(input_data['X_train'], dtype=float)
+        X_test = np.array(input_data['X_test'], dtype=float)
         y_train = np.array(input_data['y_train'])
         y_test = np.array(input_data['y_test'])
     else:
-        X = np.array(input_data['X'])
-        y = np.array(input_data['y']) if 'y' in input_data else None
-        try:
-            X_float = np.array(X, dtype=float)
-        except (ValueError, TypeError):
-            raise ValueError(f"Non-numeric features found in input data for {algorithm_type}. Encode or vectorise string/categorical features prior to model fitting.")
-
-        X_train, X_test, y_train, y_test = train_test_split(
-            X_float, y,
-            test_size=test_size,
-            random_state=42,
-            stratify=y if stratify_flag else None
-        )
+        X_float = np.array(input_data['X'], dtype=float)
+        y = np.array(input_data['y'])
+        X_train, X_test, y_train, y_test = train_test_split(X_float, y, test_size=test_size, random_state=42)
 
     model.fit(X_train, y_train)
-   
-    model_bytes = pickle.dumps(model)
-    model_b64 = base64.b64encode(model_bytes).decode('utf-8')
+    model_b64 = base64.b64encode(pickle.dumps(model)).decode('utf-8')
     predictions = model.predict(X_test)
 
-    # regression metrics
     is_regression = algorithm_type in [
         "LinearRegression", "Ridge", "Lasso", "ElasticNet",
         "DecisionTreeRegressor", "RandomForestRegressor",
-        "GradientBoostingRegressor", "SVR", "KNeighborsRegressor",
-        "ExtraTreesRegressor", "XGBRegressor", "LGBMRegressor"
+        "GradientBoostingRegressor", "AdaBoostRegressor", "BaggingRegressor",
+        "ExtraTreesRegressor", "SVR", "KNeighborsRegressor", "VotingRegressor", "StackingRegressor",
+        "XGBRegressor", "LGBMRegressor"
     ]
+
     if is_regression:
         mse_val = float(mean_squared_error(y_test, predictions))
         rmse_val = float(np.sqrt(mse_val))
@@ -658,16 +718,6 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
             exp_var = float(explained_variance_score(y_test, predictions))
         except Exception:
             exp_var = r2_val
-
-        # MAPE calculation
-        try:
-            non_zero = y_test != 0
-            if np.any(non_zero):
-                mape_val = float(np.mean(np.abs((y_test[non_zero] - predictions[non_zero]) / y_test[non_zero])) * 100)
-            else:
-                mape_val = 0.0
-        except Exception:
-            mape_val = 0.0
 
         plots_data = {
             "actual": y_test.tolist(),
@@ -680,36 +730,31 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
             coefs = model.coef_
             plots_data["feature_importances"] = np.abs(coefs).tolist() if hasattr(coefs, 'tolist') else [float(c) for c in coefs]
 
-        metrics_obj = {
-            "task_type": "regression",
-            "r2": r2_val,
-            "mse": mse_val,
-            "rmse": rmse_val,
-            "mae": mae_val,
-            "mape": mape_val,
-            "explained_variance": exp_var,
-        }
-
-        res = {
+        return {
             "predictions": predictions.tolist(),
             "r2": r2_val,
             "mse": mse_val,
             "rmse": rmse_val,
             "mae": mae_val,
-            "mape": mape_val,
             "explained_variance": exp_var,
-            "metrics": metrics_obj,
+            "metrics": {
+                "task_type": "regression",
+                "r2": r2_val,
+                "mse": mse_val,
+                "rmse": rmse_val,
+                "mae": mae_val,
+                "explained_variance": exp_var,
+            },
             "plots": plots_data,
             "model_b64": model_b64,
             "y_test": y_test.tolist(),
         }
-        return res
     else:
-        cm = confusion_matrix(y_test, predictions).tolist()
         acc_val = float(accuracy_score(y_test, predictions))
         prec_val = float(precision_score(y_test, predictions, average='weighted', zero_division=0))
         rec_val = float(recall_score(y_test, predictions, average='weighted', zero_division=0))
         f1_val = float(f1_score(y_test, predictions, average='weighted', zero_division=0))
+        cm = confusion_matrix(y_test, predictions).tolist()
         report = classification_report(y_test, predictions, output_dict=True, zero_division=0)
 
         plot_data = {"confusion_matrix": cm}
@@ -719,25 +764,19 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
             coefs = model.coef_
             plot_data["feature_importances"] = np.abs(coefs[0] if len(coefs.shape) > 1 else coefs).tolist()
 
+        # ROC Curve & Precision-Recall Curve for binary classification
         if hasattr(model, 'predict_proba') and len(np.unique(y_test)) == 2:
             try:
                 probs = model.predict_proba(X_test)[:, 1]
                 fpr, tpr, _ = roc_curve(y_test, probs)
-                plot_data["roc_curve"] = {"fpr": fpr.tolist(), "tpr": tpr.tolist()}
+                roc_auc = float(auc(fpr, tpr))
+                precisions, recalls, _ = precision_recall_curve(y_test, probs)
+                plot_data["roc_curve"] = {"fpr": fpr.tolist(), "tpr": tpr.tolist(), "auc": roc_auc}
+                plot_data["pr_curve"] = {"precision": precisions.tolist(), "recall": recalls.tolist()}
             except Exception:
                 pass
 
-        metrics_obj = {
-            "task_type": "classification",
-            "accuracy": acc_val,
-            "precision": prec_val,
-            "recall": rec_val,
-            "f1": f1_val,
-            "classification_report": report,
-            "confusion_matrix": cm,
-        }
-
-        res = {
+        return {
             "predictions": predictions.tolist(),
             "accuracy": acc_val,
             "precision": prec_val,
@@ -745,12 +784,303 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
             "f1": f1_val,
             "classification_report": report,
             "confusion_matrix": cm,
-            "metrics": metrics_obj,
+            "metrics": {
+                "task_type": "classification",
+                "accuracy": acc_val,
+                "precision": prec_val,
+                "recall": rec_val,
+                "f1": f1_val,
+                "classification_report": report,
+                "confusion_matrix": cm,
+            },
             "plots": plot_data,
             "model_b64": model_b64,
             "y_test": y_test.tolist(),
         }
-        return res
+
+
+# ─── AUTOML ENGINE ────────────────────────────────────────────────────────────
+
+def execute_automl(params: dict, input_data: dict) -> dict:
+    """
+    AutoML Engine:
+    1. Reads input data (split or raw)
+    2. Determines classification vs regression
+    3. Evaluates compatible candidate algorithms
+    4. Ranks candidates and stores winning model
+    """
+    is_split = "X_train" in input_data and "X_test" in input_data
+    if is_split:
+        X_train = np.array(input_data['X_train'], dtype=float)
+        X_test = np.array(input_data['X_test'], dtype=float)
+        y_train = np.array(input_data['y_train'])
+        y_test = np.array(input_data['y_test'])
+    else:
+        X = np.array(input_data['X'], dtype=float)
+        y = np.array(input_data['y'])
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    # Determine task
+    is_regression = any(isinstance(v, float) and not v.is_integer() for v in y_train[:20] if v is not None)
+    task_type = "regression" if is_regression else "classification"
+
+    if is_regression:
+        candidate_algos = [
+            ("RandomForestRegressor", RandomForestRegressor(n_estimators=50, random_state=42)),
+            ("GradientBoostingRegressor", GradientBoostingRegressor(n_estimators=50, random_state=42)),
+            ("LinearRegression", LinearRegression()),
+            ("Ridge", Ridge()),
+            ("DecisionTreeRegressor", DecisionTreeRegressor(max_depth=5, random_state=42)),
+            ("ExtraTreesRegressor", ExtraTreesRegressor(n_estimators=50, random_state=42)),
+        ]
+    else:
+        candidate_algos = [
+            ("RandomForestClassifier", RandomForestClassifier(n_estimators=50, random_state=42)),
+            ("GradientBoostingClassifier", GradientBoostingClassifier(n_estimators=50, random_state=42)),
+            ("LogisticRegression", LogisticRegression(max_iter=500)),
+            ("DecisionTreeClassifier", DecisionTreeClassifier(max_depth=5, random_state=42)),
+            ("ExtraTreesClassifier", ExtraTreesClassifier(n_estimators=50, random_state=42)),
+            ("GaussianNB", GaussianNB()),
+        ]
+
+    leaderboard = []
+    best_model_obj = None
+    best_score = -float('inf')
+    best_algo_name = None
+
+    for name, model in candidate_algos:
+        try:
+            model.fit(X_train, y_train)
+            preds = model.predict(X_test)
+            if is_regression:
+                r2 = float(r2_score(y_test, preds))
+                mse = float(mean_squared_error(y_test, preds))
+                rmse = float(np.sqrt(mse))
+                mae = float(mean_absolute_error(y_test, preds))
+                score = r2
+                leaderboard.append({
+                    "algorithm": name,
+                    "r2": round(r2, 4),
+                    "mse": round(mse, 4),
+                    "rmse": round(rmse, 4),
+                    "mae": round(mae, 4),
+                    "status": "success"
+                })
+            else:
+                acc = float(accuracy_score(y_test, preds))
+                prec = float(precision_score(y_test, preds, average='weighted', zero_division=0))
+                rec = float(recall_score(y_test, preds, average='weighted', zero_division=0))
+                f1_val = float(f1_score(y_test, preds, average='weighted', zero_division=0))
+                score = f1_val
+                leaderboard.append({
+                    "algorithm": name,
+                    "accuracy": round(acc, 4),
+                    "precision": round(prec, 4),
+                    "recall": round(rec, 4),
+                    "f1": round(f1_val, 4),
+                    "status": "success"
+                })
+
+            if score > best_score:
+                best_score = score
+                best_model_obj = model
+                best_algo_name = name
+        except Exception as e:
+            leaderboard.append({
+                "algorithm": name,
+                "status": "failed",
+                "error": str(e)[:100]
+            })
+
+    # Sort leaderboard
+    if is_regression:
+        leaderboard.sort(key=lambda x: x.get("r2", -999), reverse=True)
+    else:
+        leaderboard.sort(key=lambda x: x.get("f1", -999), reverse=True)
+
+    winning_b64 = base64.b64encode(pickle.dumps(best_model_obj)).decode('utf-8') if best_model_obj else ""
+    winning_preds = best_model_obj.predict(X_test).tolist() if best_model_obj else []
+
+    return {
+        "task_type": task_type,
+        "best_algorithm": best_algo_name,
+        "best_score": round(best_score, 4),
+        "leaderboard": leaderboard,
+        "model_b64": winning_b64,
+        "predictions": winning_preds,
+        "y_test": y_test.tolist(),
+        "metrics": leaderboard[0] if leaderboard else {}
+    }
+
+
+# ─── MODEL COMPARISON EXECUTOR ────────────────────────────────────────────────
+
+def execute_model_comparison(params: dict, input_data: dict) -> dict:
+    """Evaluates a user-selected list of compatible algorithms on the same dataset split."""
+    selected_algos = params.get('algorithms', [])
+    if not selected_algos:
+        selected_algos = ["LogisticRegression", "RandomForestClassifier", "DecisionTreeClassifier"]
+
+    is_split = "X_train" in input_data and "X_test" in input_data
+    if is_split:
+        X_train = np.array(input_data['X_train'], dtype=float)
+        X_test = np.array(input_data['X_test'], dtype=float)
+        y_train = np.array(input_data['y_train'])
+        y_test = np.array(input_data['y_test'])
+    else:
+        X = np.array(input_data['X'], dtype=float)
+        y = np.array(input_data['y'])
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+    is_regression = any(isinstance(v, float) and not v.is_integer() for v in y_train[:20] if v is not None)
+    results = []
+
+    for name in selected_algos:
+        if name not in ALGORITHM_REGISTRY:
+            continue
+        try:
+            cls = ALGORITHM_REGISTRY[name]
+            model = cls()
+            model.fit(X_train, y_train)
+            preds = model.predict(X_test)
+            if is_regression:
+                r2 = float(r2_score(y_test, preds))
+                mse = float(mean_squared_error(y_test, preds))
+                rmse = float(np.sqrt(mse))
+                mae = float(mean_absolute_error(y_test, preds))
+                results.append({
+                    "algorithm": name,
+                    "r2": round(r2, 4),
+                    "mse": round(mse, 4),
+                    "rmse": round(rmse, 4),
+                    "mae": round(mae, 4),
+                    "status": "success"
+                })
+            else:
+                acc = float(accuracy_score(y_test, preds))
+                prec = float(precision_score(y_test, preds, average='weighted', zero_division=0))
+                rec = float(recall_score(y_test, preds, average='weighted', zero_division=0))
+                f1_val = float(f1_score(y_test, preds, average='weighted', zero_division=0))
+                results.append({
+                    "algorithm": name,
+                    "accuracy": round(acc, 4),
+                    "precision": round(prec, 4),
+                    "recall": round(rec, 4),
+                    "f1": round(f1_val, 4),
+                    "status": "success"
+                })
+        except Exception as e:
+            results.append({"algorithm": name, "status": "failed", "error": str(e)[:100]})
+
+    if is_regression:
+        results.sort(key=lambda x: x.get("r2", -999), reverse=True)
+    else:
+        results.sort(key=lambda x: x.get("f1", -999), reverse=True)
+
+    return {
+        "task_type": "regression" if is_regression else "classification",
+        "comparison_table": results,
+        "best_algorithm": results[0]["algorithm"] if results else None
+    }
+
+
+# ─── CROSS VALIDATION EXECUTOR ────────────────────────────────────────────────
+
+def execute_cross_validation(params: dict, input_data: dict) -> dict:
+    algo_name = params.get('algorithm', 'RandomForestClassifier')
+    cv_folds = int(params.get('cv_folds', 5))
+    scoring = params.get('scoring', 'accuracy')
+
+    X = np.array(input_data.get('X', input_data.get('X_train', [])), dtype=float)
+    y = np.array(input_data.get('y', input_data.get('y_train', [])))
+
+    clf_cls = ALGORITHM_REGISTRY.get(algo_name, RandomForestClassifier)
+    model = clf_cls()
+
+    is_stratified = params.get('stratified', True) and not any(isinstance(v, float) and not v.is_integer() for v in y[:20] if v is not None)
+    cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42) if is_stratified else KFold(n_splits=cv_folds, shuffle=True, random_state=42)
+
+    scores = cross_val_score(model, X, y, cv=cv, scoring=scoring if scoring != 'default' else None)
+
+    fold_details = [{"fold": i + 1, "score": round(float(s), 4)} for i, s in enumerate(scores)]
+    return {
+        "algorithm": algo_name,
+        "cv_folds": cv_folds,
+        "scoring_metric": scoring,
+        "folds": fold_details,
+        "mean_score": round(float(np.mean(scores)), 4),
+        "std_dev": round(float(np.std(scores)), 4)
+    }
+
+
+# ─── EXPLAINABILITY & WHAT-IF ─────────────────────────────────────────────────
+
+def execute_explainability(params: dict, input_data: dict) -> dict:
+    cols = input_data.get('columns', [])
+    X_test = np.array(input_data.get('X_test', []), dtype=float)
+    y_test = np.array(input_data.get('y_test', []))
+    model_b64 = params.get('model_b64') or input_data.get('model_b64')
+
+    if not model_b64 or len(X_test) == 0:
+        return {"feature_importance": []}
+
+    model = pickle.loads(base64.b64decode(model_b64))
+
+    importance_list = []
+    if hasattr(model, 'feature_importances_'):
+        importances = model.feature_importances_
+        for idx, imp in enumerate(importances):
+            col_name = cols[idx] if idx < len(cols) else f"feature_{idx}"
+            importance_list.append({"feature": col_name, "importance": round(float(imp), 4)})
+    elif hasattr(model, 'coef_'):
+        coefs = np.abs(model.coef_[0] if len(model.coef_.shape) > 1 else model.coef_)
+        for idx, imp in enumerate(coefs):
+            col_name = cols[idx] if idx < len(cols) else f"feature_{idx}"
+            importance_list.append({"feature": col_name, "importance": round(float(imp), 4)})
+    else:
+        # Fallback to permutation importance
+        try:
+            r = permutation_importance(model, X_test, y_test, n_repeats=3, random_state=42)
+            for idx, imp in enumerate(r.importances_mean):
+                col_name = cols[idx] if idx < len(cols) else f"feature_{idx}"
+                importance_list.append({"feature": col_name, "importance": round(float(imp), 4)})
+        except Exception:
+            pass
+
+    importance_list.sort(key=lambda x: x["importance"], reverse=True)
+    return {
+        "feature_importance": importance_list,
+        "top_positive": importance_list[:5],
+        "top_negative": sorted(importance_list, key=lambda x: x["importance"])[:5]
+    }
+
+
+def execute_what_if(params: dict, input_data: dict) -> dict:
+    feature_values = params.get('feature_values', {})
+    cols = input_data.get('columns', list(feature_values.keys()))
+    model_b64 = params.get('model_b64') or input_data.get('model_b64')
+
+    if not model_b64:
+        raise ValueError("Model binary is required for What-If simulation.")
+
+    model = pickle.loads(base64.b64decode(model_b64))
+    vector = [float(feature_values.get(c, 0.0)) for c in cols]
+
+    pred = model.predict([vector])[0]
+    confidence = None
+    if hasattr(model, 'predict_proba'):
+        try:
+            probs = model.predict_proba([vector])[0]
+            confidence = round(float(max(probs)), 4)
+        except Exception:
+            pass
+
+    return {
+        "prediction": pred.item() if hasattr(pred, 'item') else pred,
+        "confidence": confidence,
+        "input_features": feature_values
+    }
+
 
 # ─── DL ALGORITHMS ────────────────────────────────────────────────────────────
 
@@ -783,16 +1113,25 @@ def execute_dl(algorithm_type: str, params: dict, input_data: dict) -> dict:
         validation_split=0.2,
         verbose=0
     )
-    
 
     buffer = io.BytesIO()
     model.save(buffer, save_format='h5')
-    model_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')    
+    model_b64 = base64.b64encode(buffer.getvalue()).decode('utf-8')
+
+    acc_history = history.history.get('accuracy', [])
+    val_acc_history = history.history.get('val_accuracy', [])
+    loss_history = history.history.get('loss', [])
+
     return {
-        "final_accuracy": history.history['accuracy'][-1],
-        "final_val_accuracy": history.history['val_accuracy'][-1],
-        "final_loss": history.history['loss'][-1],
-        "epochs_run": len(history.history['accuracy']),
+        "final_accuracy": acc_history[-1] if acc_history else 0.0,
+        "final_val_accuracy": val_acc_history[-1] if val_acc_history else 0.0,
+        "final_loss": loss_history[-1] if loss_history else 0.0,
+        "epochs_run": len(acc_history),
+        "learning_curves": {
+            "accuracy": [round(float(v), 4) for v in acc_history],
+            "val_accuracy": [round(float(v), 4) for v in val_acc_history],
+            "loss": [round(float(v), 4) for v in loss_history]
+        },
         "model_b64": model_b64,
     }
 
@@ -833,8 +1172,8 @@ def build_dl_model(algorithm_type: str, params: dict, input_shape: tuple) -> ker
     elif algorithm_type == "Autoencoder":
         model.add(layers.Input(shape=input_shape))
         model.add(layers.Dense(units, activation='relu'))
-        model.add(layers.Dense(units // 4, activation='relu'))       # bottleneck
+        model.add(layers.Dense(units // 4, activation='relu'))
         model.add(layers.Dense(units, activation='relu'))
-        model.add(layers.Dense(input_shape[0], activation='sigmoid'))  # reconstruct
+        model.add(layers.Dense(input_shape[0], activation='sigmoid'))
 
     return model

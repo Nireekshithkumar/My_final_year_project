@@ -100,11 +100,13 @@ class GraphExecuteView(APIView):
             graph.error = ''
             graph.save(update_fields=['status', 'error'])
 
+        retry_node_id = request.data.get('retry_from_node') if isinstance(request.data, dict) else None
+
         # Submit to controlled thread pool — returns immediately without blocking Daphne
-        _executor.submit(execute_graph, graph.id)
+        _executor.submit(execute_graph, graph.id, retry_node_id)
 
         return Response({
-            'message': 'Execution started',
+            'message': 'Execution started' if not retry_node_id else f'Retrying execution from node {retry_node_id}',
             'graph_id': graph.id,
             'status': 'running',
         })

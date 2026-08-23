@@ -21,10 +21,15 @@ import DatasetViewer from '../components/DatasetViewer'
 import TransformationHistory from '../components/TransformationHistory'
 import ChartPanel from '../components/ChartPanel'
 import ErrorBoundary from '../components/ErrorBoundary'
-import ExecutionLogs from '../components/ExecutionLogs'
 import { PARAM_SCHEMAS } from '../config/paramSchemas'
 import api from '../api/axios'
 import useStore from '../store/useStore'
+import DatasetProfileModal from '../components/DatasetProfileModal'
+import AutoMLModal from '../components/AutoMLModal'
+import ModelCompareModal from '../components/ModelCompareModal'
+import ModelRegistryModal from '../components/ModelRegistryModal'
+import WhatIfModal from '../components/WhatIfModal'
+import AICopilotPanel from '../components/AICopilotPanel'
 
 const nodeTypes = { taskNode: TaskNode }
 let idCounter = 1
@@ -349,12 +354,13 @@ const FlowCanvas = forwardRef(function FlowCanvas(
           outputs: type === 'end' ? [] : OUTPUT_PRESETS[type] || OUTPUT_PRESETS.default,
           onPredict: handlePredict,
           onRunNode: handleRunNode,
+          onDownload: handleDownload,
         },
       }
       setNodes((currentNodes) => currentNodes.concat(newNode))
       onStatusChange('idle')
     },
-    [onStatusChange, screenToFlowPosition, setNodes, handlePredict, handleRunNode]
+    [onStatusChange, screenToFlowPosition, setNodes, handlePredict, handleRunNode, handleDownload]
   )
 
   // Client-side defensive DAG validation
@@ -595,6 +601,7 @@ const FlowCanvas = forwardRef(function FlowCanvas(
               ...extraData,
               onPredict: handlePredict,
               onRunNode: handleRunNode,
+              onDownload: handleDownload,
               status: n?.data?.status || 'ready',
             },
           }
@@ -1100,18 +1107,6 @@ const FlowCanvas = forwardRef(function FlowCanvas(
           </div>
         )}
       </div>
-
-      {/* Resizable Bottom Dataset Spreadsheet Viewer */}
-      {showBottomPanel && (
-        <DatasetViewer
-          pipelineId={pipelineId}
-          selectedNodeId={selectedNodeId}
-          isDark={isDark}
-          refreshTrigger={refreshTrigger}
-          height={bottomHeight}
-          onHeightChange={setBottomHeight}
-        />
-      )}
     </div>
   )
 })
@@ -1136,6 +1131,20 @@ export default function Canvas() {
   const [showRightPanel, setShowRightPanel] = useState(true)
   const [showBottomPanel, setShowBottomPanel] = useState(true)
 
+  // Advanced ML Studio Modals
+  const [showProfileModal, setShowProfileModal] = useState(false)
+  const [showAutoMLModal, setShowAutoMLModal] = useState(false)
+  const [showCompareModal, setShowCompareModal] = useState(false)
+  const [showRegistryModal, setShowRegistryModal] = useState(false)
+  const [showWhatIfModal, setShowWhatIfModal] = useState(false)
+  const [showCopilotPanel, setShowCopilotPanel] = useState(false)
+
+  // Extract active dataset and feature context from canvas
+  const [activeDatasetId, setActiveDatasetId] = useState(null)
+  const [activeFeatures, setActiveFeatures] = useState([])
+  const [activeNodesSnapshot, setActiveNodesSnapshot] = useState([])
+  const [lastPipelineError, setLastPipelineError] = useState('')
+
   useEffect(() => {
     const loadPipeline = async () => {
       if (!pipelineId || isNaN(pipelineId)) return
@@ -1144,6 +1153,17 @@ export default function Canvas() {
         const { data } = await api.get(`/pipelines/${pipelineId}/`)
         setWorkflowName(data.name || 'Untitled pipeline')
         setWorkflowKey(data.description || '')
+
+        if (data.graph && data.graph.nodes) {
+          setActiveNodesSnapshot(data.graph.nodes)
+          const dsNode = data.graph.nodes.find((n) => n.data?.nodeType === 'loadDataset')
+          if (dsNode && dsNode.data?.datasetId) {
+            setActiveDatasetId(dsNode.data.datasetId)
+          }
+          if (data.graph.error) {
+            setLastPipelineError(data.graph.error)
+          }
+        }
       } catch (err) {
         if (err.response?.status === 401) {
           navigate('/login')
@@ -1236,6 +1256,7 @@ export default function Canvas() {
               setRefreshTrigger((t) => t + 1)
             } else if (data.stage === 'error') {
               setStatus('failed')
+              setLastPipelineError(data.message || 'Execution error')
               setRefreshTrigger((t) => t + 1)
             } else if (data.stage === 'node_success' || data.stage === 'node_error') {
               setRefreshTrigger((t) => t + 1)
@@ -1261,7 +1282,11 @@ export default function Canvas() {
           }
         }
       } catch {
-        // Handle sync constructor errors (e.g. invalid URL)
+        if (!isUnmounted && reconnectAttempts < maxReconnectAttempts) {
+          reconnectAttempts += 1
+          const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 10000)
+          reconnectTimeout = setTimeout(connectWebSocket, delay)
+        }
       }
     }
 
@@ -1279,17 +1304,6 @@ export default function Canvas() {
       }
     }
   }, [pipelineId])
-
-  const handleUpdate = async () => {
-    if (!pipelineId || isNaN(pipelineId)) return
-
-    try {
-      await api.patch(`/pipelines/${pipelineId}/`, { name: workflowName, description: workflowKey })
-      setStatus('saved')
-    } catch {
-      setStatus('failed')
-    }
-  }
 
   const handlePause = async () => {
     if (!pipelineId || isNaN(pipelineId)) return
@@ -1350,46 +1364,40 @@ export default function Canvas() {
     }
   }
 
-  const handleDownload = async () => {
+  const handleExportProject = () => {
     if (!pipelineId || isNaN(pipelineId)) return
-    window.location.href = `/api/pipelines/${pipelineId}/download/`
+    window.location.href = `/api/pipelines/${pipelineId}/export/`
   }
 
-  const styles = topbar(isDark)
+  const handleImportProject = async (e) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const reader = new FileReader()
+      reader.onload = async (event) => {
+        try {
+          const jsonContent = JSON.parse(event.target.result)
+          const { data } = await api.post('/pipelines/import/', jsonContent)
+          if (data.pipeline_id) {
+            navigate(`/canvas/${data.pipeline_id}`)
+          }
+        } catch {
+          alert('Invalid project JSON file format.')
+        }
+      }
+      reader.readAsText(file)
+    } catch {
+      alert('Failed reading file.')
+    }
+  }
+
+  const handleOpenReport = () => {
+    if (!pipelineId || isNaN(pipelineId)) return
+    window.open(`/api/pipelines/${pipelineId}/report/`, '_blank')
+  }
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 56px)', background: isDark ? '#0f172a' : '#fff', overflow: 'hidden' }}>
-      <div style={styles.wrap}>
-        <div style={styles.label}>Workflow</div>
-        <div style={styles.fields}>
-          <div>
-            <label style={styles.small}>Workflow Name *</label>
-            <input style={styles.input} value={workflowName} onChange={(e) => setWorkflowName(e.target.value)} />
-          </div>
-          <div>
-            <label style={styles.small}>Key</label>
-            <input style={styles.input} value={workflowKey} onChange={(e) => setWorkflowKey(e.target.value)} />
-          </div>
-          {status === 'running' && <div style={styles.small}>Running… {progress}%</div>}
-          {status === 'paused' && (
-            <div style={{ ...styles.small, color: '#f59e0b', fontWeight: 600 }}>Paused at {progress}%</div>
-          )}
-          {predictionResult && (
-            <div style={{ ...styles.small, color: isDark ? '#4ade80' : '#16a34a', fontWeight: 600 }}>
-              {predictionResult}
-            </div>
-          )}
-          <button style={styles.btnGray} onClick={handleDownload}>
-            ⬇ Download Model
-          </button>
-          <button style={styles.btnGray} onClick={handleUpdate}>
-            Update
-          </button>
-          <button style={styles.btnDark}>User Permissions</button>
-          <button style={styles.btnDark}>Variables</button>
-        </div>
-      </div>
-
       <Toolbar
         pipelineName={workflowName}
         status={status}
@@ -1408,6 +1416,15 @@ export default function Canvas() {
         onZoomIn={() => flowRef.current?.zoomIn()}
         onZoomOut={() => flowRef.current?.zoomOut()}
         onFitView={() => flowRef.current?.fitView()}
+        onOpenProfile={() => setShowProfileModal(true)}
+        onOpenAutoML={() => setShowAutoMLModal(true)}
+        onOpenCompare={() => setShowCompareModal(true)}
+        onOpenRegistry={() => setShowRegistryModal(true)}
+        onOpenWhatIf={() => setShowWhatIfModal(true)}
+        onOpenCopilot={() => setShowCopilotPanel(!showCopilotPanel)}
+        onOpenReport={handleOpenReport}
+        onExportProject={handleExportProject}
+        onImportProject={handleImportProject}
       />
 
       <ReactFlowProvider>
@@ -1429,6 +1446,51 @@ export default function Canvas() {
           showBottomPanel={showBottomPanel}
         />
       </ReactFlowProvider>
+
+      {/* Advanced Studio Modals */}
+      <DatasetProfileModal
+        isOpen={showProfileModal}
+        onClose={() => setShowProfileModal(false)}
+        datasetId={activeDatasetId}
+        onApplyTarget={(targetCol) => {
+          setShowProfileModal(false)
+          alert(`Target column '${targetCol}' selected. Update your Split Dataset block parameters.`)
+        }}
+      />
+
+      <AutoMLModal
+        isOpen={showAutoMLModal}
+        onClose={() => setShowAutoMLModal(false)}
+        pipelineId={pipelineId}
+        onAutoMLComplete={() => {
+          setRefreshTrigger((t) => t + 1)
+        }}
+      />
+
+      <ModelCompareModal
+        isOpen={showCompareModal}
+        onClose={() => setShowCompareModal(false)}
+        pipelineId={pipelineId}
+      />
+
+      <ModelRegistryModal
+        isOpen={showRegistryModal}
+        onClose={() => setShowRegistryModal(false)}
+      />
+
+      <WhatIfModal
+        isOpen={showWhatIfModal}
+        onClose={() => setShowWhatIfModal(false)}
+        pipelineId={pipelineId}
+        initialFeatures={activeFeatures}
+      />
+
+      <AICopilotPanel
+        isOpen={showCopilotPanel}
+        onClose={() => setShowCopilotPanel(false)}
+        pipelineNodes={activeNodesSnapshot}
+        pipelineError={lastPipelineError}
+      />
     </div>
   )
 }

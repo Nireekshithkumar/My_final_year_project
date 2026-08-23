@@ -91,6 +91,43 @@ def validate_and_sort_graph(nodes, edges):
     return order
 
 
+def validate_pipeline_dag(nodes, edges):
+    """
+    Comprehensive DAG validator checking semantic integrity:
+    - Cycle & connectivity validation
+    - Missing dataset block check
+    - Missing target column check
+    - Ordering integrity
+    """
+    order = validate_and_sort_graph(nodes, edges)
+    if not order:
+        return []
+
+    node_map = {str(n['id']): n for n in nodes if isinstance(n, dict)}
+    node_types = [node_map[nid].get('data', {}).get('nodeType') for nid in order if nid in node_map]
+
+    data_requiring_types = [
+        'splitDataset', 'Encoder', 'StandardScaler', 'MinMaxScaler', 'RobustScaler',
+        'Histogram', 'Boxplot', 'Correlation', 'DescribeStats', 'Imputer',
+        'FeatureSelector', 'ClassImbalance', 'RandomForestClassifier', 'LogisticRegression'
+    ]
+
+    has_load = any(t == 'loadDataset' for t in node_types)
+    has_dependent = any(t in data_requiring_types for t in node_types)
+
+    if has_dependent and not has_load:
+        raise ValueError("Pipeline Validation: A 'Load Dataset' block is required before data processing blocks. Connect a Load Dataset block.")
+
+    for n in nodes:
+        if isinstance(n, dict) and n.get('data', {}).get('nodeType') == 'splitDataset':
+            params = n.get('data', {}).get('params', {})
+            target = resolve_target_column(params)
+            if not target:
+                raise ValueError("Pipeline Validation: 'Split Dataset' block requires a target column to predict. Please select a target column in the block settings.")
+
+    return order
+
+
 def topological_sort(nodes, edges):
     return validate_and_sort_graph(nodes, edges)
 
@@ -384,64 +421,8 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
                 "Please select or re-upload the dataset in the 'Load Dataset' block."
             )
 
-        storage_name = str(dataset.file.name) if dataset.file else 'None'
-        storage_backend = dataset.file.storage.__class__.__name__ if (dataset.file and hasattr(dataset.file, 'storage')) else 'Unknown'
-
-        logger.info(
-            f"[Load Dataset] ID: {dataset.id}, Filename: {dataset.name}, "
-            f"Storage Name: {storage_name}, Storage Backend: {storage_backend}"
-        )
-
-        df = None
-        # 1. Primary: Read directly via Django Storage API (supports local, Render Persistent Disk, S3, GCS, etc.)
-        if dataset.file:
-            try:
-                with dataset.file.open('rb') as f:
-                    df = pd.read_csv(f)
-                logger.info(f"[Load Dataset] Successfully opened '{dataset.name}' via Storage API ({len(df)} rows, {len(df.columns)} cols).")
-            except (FileNotFoundError, ValueError, OSError) as e:
-                logger.warning(f"[Load Dataset] Direct storage open failed: {e}. Checking local filesystem fallback paths...")
-                df = None
-            except Exception as e:
-                logger.error(f"[Load Dataset] Unexpected error reading file through storage: {e}")
-                df = None
-
-        # 2. Secondary fallback: Local candidate paths (in case storage path prefix shifted)
-        if df is None and dataset.file:
-            candidates = []
-            try:
-                from django.core.files.storage import default_storage
-                if hasattr(default_storage, 'path'):
-                    try:
-                        candidates.append(default_storage.path(dataset.file.name))
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-            try:
-                candidates.append(dataset.file.path)
-            except Exception:
-                pass
-            raw_name = str(dataset.file.name)
-            candidates.append(os.path.join(str(settings.MEDIA_ROOT), raw_name))
-            candidates.append(os.path.join(str(settings.BASE_DIR), 'media', raw_name))
-            candidates.append(os.path.join(str(settings.BASE_DIR), raw_name))
-
-            for cp in candidates:
-                if cp and os.path.exists(cp):
-                    try:
-                        df = pd.read_csv(cp)
-                        logger.info(f"[Load Dataset] Successfully opened '{dataset.name}' via candidate path.")
-                        break
-                    except Exception:
-                        pass
-
-        if df is None:
-            raise ValueError(
-                f"Dataset file '{dataset.name}' is missing from configured storage. "
-                "On Render free tier / ephemeral disk instances, uploaded files are cleared on service redeploy or restart. "
-                "Please re-upload or select the dataset in the 'Load Dataset' block to continue."
-            )
+        from common.storage import StorageAbstraction
+        df = StorageAbstraction.read_dataset_df(dataset)
 
         result = {
             "dataframe": df.to_dict(orient='list'),

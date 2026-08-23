@@ -206,7 +206,7 @@ const TabBtn = ({ id, label, icon, active, onClick }) => (
   </button>
 );
 
-// ─── Download helpers ─────────────────────────────────────────────────────────
+// ─── Download & Toolbar helpers ───────────────────────────────────────────────
 function downloadSVG(svgRef, filename = "chart.svg") {
   try {
     const svg = svgRef.current?.querySelector("svg");
@@ -219,16 +219,72 @@ function downloadSVG(svgRef, filename = "chart.svg") {
   } catch {}
 }
 
-// ─── Chart container with download ───────────────────────────────────────────
-const ChartContainer = ({ title, color = "#ff0071", children, chartRef }) => {
+function downloadPNG(svgRef, filename = "chart.png") {
+  try {
+    const svg = svgRef.current?.querySelector("svg");
+    if (!svg) return;
+    const xml = new XMLSerializer().serializeToString(svg);
+    const svg64 = btoa(unescape(encodeURIComponent(xml)));
+    const image64 = "data:image/svg+xml;base64," + svg64;
+
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = svg.clientWidth || 600;
+      canvas.height = svg.clientHeight || 400;
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#080c14";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.drawImage(img, 0, 0);
+      const a = document.createElement("a");
+      a.href = canvas.toDataURL("image/png");
+      a.download = filename;
+      a.click();
+    };
+    img.src = image64;
+  } catch {}
+}
+
+function downloadChartCSV(data, filename = "chart_data.csv") {
+  try {
+    if (!data || !Array.isArray(data) || data.length === 0) return;
+    const keys = Object.keys(data[0]);
+    const csvRows = [keys.join(",")];
+    data.forEach((row) => {
+      csvRows.push(keys.map((k) => JSON.stringify(row[k] ?? "")).join(","));
+    });
+    const blob = new Blob([csvRows.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+  } catch {}
+}
+
+// ─── Chart container with rich toolbar ─────────────────────────────────────────
+const ChartContainer = ({ title, color = "#ff0071", children, chartRef, chartData }) => {
   const [hovered, setHovered] = useState(false);
+  const [zoom, setZoom] = useState(1);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+
+  const toggleFullscreen = () => {
+    if (!chartRef.current) return;
+    if (!document.fullscreenElement) {
+      chartRef.current.requestFullscreen?.().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      document.exitFullscreen?.().then(() => setIsFullscreen(false)).catch(() => {});
+    }
+  };
+
+  const safeTitle = title.replace(/\s+/g, "_");
+
   return (
     <div
       ref={chartRef}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       style={{
-        background: "rgba(8,12,20,0.7)",
+        background: isFullscreen ? "#080c14" : "rgba(8,12,20,0.7)",
         borderRadius: 12,
         border: "1px solid rgba(255,255,255,0.07)",
         padding: "14px 14px 10px",
@@ -236,32 +292,94 @@ const ChartContainer = ({ title, color = "#ff0071", children, chartRef }) => {
         transition: "border-color 0.2s",
         borderColor: hovered ? `${color}44` : "rgba(255,255,255,0.07)",
         boxShadow: hovered ? `0 4px 32px ${color}18` : "none",
+        overflow: "hidden",
       }}
     >
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
         <span style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 0.3 }}>{title}</span>
-        <button
-          onClick={() => chartRef && downloadSVG(chartRef, `${title.replace(/\s+/g, "_")}.svg`)}
-          style={{
-            padding: "3px 8px",
-            fontSize: 10,
-            borderRadius: 6,
-            background: `${color}18`,
-            border: `1px solid ${color}40`,
-            color,
-            cursor: "pointer",
-            fontWeight: 600,
-            opacity: hovered ? 1 : 0,
-            transition: "opacity 0.18s",
-          }}
-        >
-          ⬇ SVG
-        </button>
+        
+        {/* Interactive Chart Toolbar */}
+        <div style={{ display: "flex", gap: 4, opacity: hovered || isFullscreen ? 1 : 0.7, transition: "opacity 0.2s" }}>
+          <button
+            onClick={() => setZoom((z) => Math.min(z + 0.2, 2.5))}
+            title="Zoom In"
+            style={btnToolStyle(color)}
+          >
+            +
+          </button>
+          <button
+            onClick={() => setZoom((z) => Math.max(z - 0.2, 0.5))}
+            title="Zoom Out"
+            style={btnToolStyle(color)}
+          >
+            -
+          </button>
+          {zoom !== 1 && (
+            <button
+              onClick={() => setZoom(1)}
+              title="Reset Zoom"
+              style={btnToolStyle(color)}
+            >
+              ↺
+            </button>
+          )}
+          <button
+            onClick={toggleFullscreen}
+            title="Toggle Fullscreen"
+            style={btnToolStyle(color)}
+          >
+            ⛶
+          </button>
+          <button
+            onClick={() => chartRef && downloadPNG(chartRef, `${safeTitle}.png`)}
+            title="Download PNG"
+            style={btnToolStyle(color)}
+          >
+            PNG
+          </button>
+          <button
+            onClick={() => chartRef && downloadSVG(chartRef, `${safeTitle}.svg`)}
+            title="Download SVG"
+            style={btnToolStyle(color)}
+          >
+            SVG
+          </button>
+          {chartData && (
+            <button
+              onClick={() => downloadChartCSV(chartData, `${safeTitle}.csv`)}
+              title="Download Data CSV"
+              style={btnToolStyle(color)}
+            >
+              CSV
+            </button>
+          )}
+        </div>
       </div>
-      {children}
+
+      {/* Chart Canvas with Smooth Scale Transformation */}
+      <div
+        style={{
+          transform: `scale(${zoom})`,
+          transformOrigin: "center center",
+          transition: "transform 0.15s ease-out",
+        }}
+      >
+        {children}
+      </div>
     </div>
   );
 };
+
+const btnToolStyle = (color) => ({
+  padding: "2px 6px",
+  fontSize: 9.5,
+  borderRadius: 4,
+  background: `${color}14`,
+  border: `1px solid ${color}33`,
+  color: color,
+  cursor: "pointer",
+  fontWeight: 700,
+});
 
 // ════════════════════════════════════════════════════════════════════════════
 // MAIN CHART PANEL

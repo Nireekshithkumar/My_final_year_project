@@ -1,6 +1,10 @@
+import logging
 import pandas as pd
 from rest_framework import serializers
+from common.storage import StorageAbstraction
 from .models import Dataset
+
+logger = logging.getLogger(__name__)
 
 class DatasetUploadSerializer(serializers.ModelSerializer):
     class Meta:
@@ -14,16 +18,20 @@ class DatasetUploadSerializer(serializers.ModelSerializer):
             **validated_data
         )
         try:
-            with instance.file.open('rb') as f:
-                df = pd.read_csv(f, nrows=500)
-                instance.columns = list(df.columns)
-                instance.column_types = self._detect_types(df)
-            with instance.file.open('rb') as f:
-                full_len = sum(1 for _ in f) - 1
-                instance.row_count = max(0, full_len)
+            df = StorageAbstraction.read_dataset_df(instance, nrows=500)
+            instance.columns = list(df.columns)
+            instance.column_types = self._detect_types(df)
+            
+            # Count total rows safely
+            try:
+                full_df = StorageAbstraction.read_dataset_df(instance)
+                instance.row_count = len(full_df)
+            except Exception:
+                instance.row_count = len(df)
+            
             instance.save(update_fields=['columns', 'row_count', 'column_types'])
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning(f"Metadata extraction for uploaded dataset '{instance.name}' warning: {e}")
         return instance
     
     def _detect_types(self, df):
