@@ -1,0 +1,48 @@
+# =========================
+# Environment
+# =========================
+python-dotenv
+
+# =========================
+# LangChain Core
+# =========================
+langchain
+langchain-core
+langchain-community
+langchain-text-splitters
+
+# =========================
+# OpenAI
+# =========================
+openai
+langchain-openai
+
+# =========================
+# Groq
+# =========================
+groq
+langchain-groq
+
+# =========================
+# Google Gemini
+# =========================
+google-generativeai
+langchain-google-genai
+
+# =========================
+# Mistral
+# =========================
+mistralai
+langchain-mistralai
+
+# =========================
+# HTTP / API
+# =========================
+requests
+httpx
+
+# =========================
+# FastAPI
+# =========================
+fastapi
+uvicorn
