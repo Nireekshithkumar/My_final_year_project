@@ -1,4 +1,5 @@
 import { useState } from "react";
+import MarkdownMessage from "./MarkdownMessage";
 
 export default function AICopilotPanel({ isOpen, onClose, pipelineNodes = [], pipelineError = "" }) {
   const [messages, setMessages] = useState([
@@ -81,10 +82,9 @@ export default function AICopilotPanel({ isOpen, onClose, pipelineNodes = [], pi
               maxWidth: "85%",
               fontSize: 12,
               lineHeight: 1.5,
-              whiteSpace: "pre-wrap",
             }}
           >
-            {m.text}
+            <MarkdownMessage content={m.text} isUser={m.sender === "user"} />
           </div>
         ))}
         {thinking && (

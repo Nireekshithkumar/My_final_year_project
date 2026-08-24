@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import api from '../api/axios'
 import useStore from '../store/useStore'
+import MarkdownMessage from '../components/MarkdownMessage'
 
 export default function AICopilot() {
   const navigate = useNavigate()
@@ -481,9 +482,8 @@ export default function AICopilot() {
                   lineHeight: 1.6,
                   backdropFilter: 'blur(10px)',
                   boxShadow: m.role === 'user' ? '0 4px 20px rgba(255, 0, 113, 0.15)' : '0 4px 16px rgba(0,0,0,0.4)',
-                  whiteSpace: 'pre-wrap',
                 }}>
-                  {m.content}
+                  <MarkdownMessage content={m.content} isUser={m.role === 'user'} />
 
                   {/* Interactive Action Card: Generated Pipeline */}
                   {m.actionType === 'generate_pipeline' && m.payload && (

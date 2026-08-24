@@ -139,20 +139,47 @@ class NeuralCanvaAgent:
         recommended_target = ds_context.get("recommended_target")
 
         # Build clean markdown
-        markdown = f"""### 📊 Dataset Analysis: `{ds_name}`
+        # Format numerical & categorical lists
+        num_display = ", ".join(num_cols[:6]) + ("..." if len(num_cols) > 6 else "")
+        cat_display = ", ".join(cat_cols[:6]) + ("..." if len(cat_cols) > 6 else "") if cat_cols else "None detected"
+        missing_status = f"**{missing_count}** cells ({missing_pct}%)" if missing_count > 0 else "✅ **0** cells (0.0%) — clean dataset"
+        impute_step = "Impute missing values using mean/median for numerical, most-frequent for categorical." if missing_pct > 0 else "No missing-value treatment is required."
+        encode_step = "Encode categorical features using **One-Hot Encoding** or **Label Encoding**." if cat_cols else "All features are numerical — encoding not required."
 
-- **Dimensions:** **{rows:,}** rows × **{cols}** columns
-- **Feature Breakdown:**
-  - 🔢 **Numerical Features ({len(num_cols)}):** {", ".join(num_cols[:5])}{"..." if len(num_cols) > 5 else ""}
-  - 🏷️ **Categorical Features ({len(cat_cols)}):** {", ".join(cat_cols[:5]) if cat_cols else "None detected"}
-- **Missing Data:** **{missing_count}** cells ({missing_pct}%)
-- **Target Column:** `{recommended_target or 'Select in Split node'}`
-- **Predicted ML Task:** **{task.capitalize()}**
+        markdown = f"""## 📊 Dataset Analysis
 
-#### 💡 Recommended Preprocessing:
-1. {"Impute missing values" if missing_pct > 0 else "No missing values to impute (clean dataset)"}
-2. {"Encode categorical variables using Encoder (One-Hot or Label)" if cat_cols else "All features numerical; encoding not strictly required"}
-3. Standardize features using `StandardScaler` for distance/linear models
+### {ds_name}
+
+**{rows:,} rows × {cols} columns**
+
+---
+
+#### 📋 Feature Overview
+
+🔢 **Numerical Features — {len(num_cols)}**
+{num_display}
+
+🏷️ **Categorical Features — {len(cat_cols)}**
+{cat_display}
+
+✅ **Missing Data — {missing_status}**
+
+🎯 **Target Column — {recommended_target or 'Not selected'}**
+
+🤖 **Predicted ML Task — {task.capitalize()}**
+
+---
+
+## 💡 Recommended Preprocessing
+
+**1. Missing Values**
+{impute_step}
+
+**2. Encode Categorical Features**
+{encode_step}
+
+**3. Scale Numerical Features**
+Apply `StandardScaler` for scale-sensitive models (Logistic Regression, SVM, KNN).
 """
 
         return {
