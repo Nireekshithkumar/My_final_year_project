@@ -15,9 +15,10 @@ from dotenv import load_dotenv
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Explicitly load .env from the project root
+# Explicitly load .env from the project root and GENAI/.env
 ENV_FILE = BASE_DIR / ".env"
 load_dotenv(ENV_FILE)
+load_dotenv(BASE_DIR / "GENAI" / ".env")
 
 
 # ============================================================
@@ -27,6 +28,7 @@ load_dotenv(ENV_FILE)
 REDIS_URL = os.getenv("REDIS_URL")
 
 load_dotenv(BASE_DIR / ".env", override=True)
+load_dotenv(BASE_DIR / "GENAI" / ".env", override=False)
 
 
 # ============================================================

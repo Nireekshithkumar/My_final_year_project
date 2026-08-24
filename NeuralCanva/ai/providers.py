@@ -11,7 +11,15 @@ Priority:
 
 import os
 import logging
+from pathlib import Path
 from typing import Optional, Tuple, Any
+# pyrefly: ignore [missing-import]
+from dotenv import load_dotenv
+
+# Load env variables from root and GENAI folder if present
+_BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(_BASE_DIR / ".env")
+load_dotenv(_BASE_DIR / "GENAI" / ".env")
 
 logger = logging.getLogger(__name__)
 
@@ -30,12 +38,12 @@ class ProviderManager:
         # 1. Groq
         groq_key = os.environ.get("GROQ_API_KEY", "").strip()
         if groq_key:
-            providers.append({"name": "Groq", "id": "groq", "model": os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")})
+            providers.append({"name": "Groq", "id": "groq", "model": os.environ.get("GROQ_MODEL", "openai/gpt-oss-120b")})
 
         # 2. Gemini
         gemini_key = (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")).strip()
         if gemini_key:
-            providers.append({"name": "Google Gemini", "id": "gemini", "model": os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")})
+            providers.append({"name": "Google Gemini", "id": "gemini", "model": os.environ.get("GEMINI_MODEL", "gemini-3.6-flash")})
 
         # 3. Mistral
         mistral_key = os.environ.get("MISTRAL_API_KEY", "").strip()
@@ -58,34 +66,48 @@ class ProviderManager:
         # Try Groq
         groq_key = os.environ.get("GROQ_API_KEY", "").strip()
         if groq_key:
-            try:
-                from langchain_groq import ChatGroq
-                model_name = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-                chat = ChatGroq(
-                    api_key=groq_key,
-                    model=model_name,
-                    temperature=temperature,
-                    max_retries=2,
-                )
-                return chat, f"Groq ({model_name})"
-            except Exception as e:
-                logger.warning(f"Groq provider init failed: {e}. Attempting fallback...")
+            candidate_models = [
+                os.environ.get("GROQ_MODEL"),
+                "openai/gpt-oss-120b",
+                "qwen/qwen3.6-27b",
+                "groq/compound-mini",
+                "llama-3.3-70b-versatile",
+                "llama-3.1-8b-instant",
+            ]
+            for model_name in filter(None, candidate_models):
+                try:
+                    from langchain_groq import ChatGroq
+                    chat = ChatGroq(
+                        api_key=groq_key,
+                        model=model_name,
+                        temperature=temperature,
+                        max_retries=1,
+                    )
+                    return chat, f"Groq ({model_name})"
+                except Exception as e:
+                    logger.warning(f"Groq ({model_name}) init failed: {e}")
 
         # Try Google Gemini
         gemini_key = (os.environ.get("GOOGLE_API_KEY") or os.environ.get("GEMINI_API_KEY", "")).strip()
         if gemini_key:
-            try:
-                from langchain_google_genai import ChatGoogleGenerativeAI
-                model_name = os.environ.get("GEMINI_MODEL", "gemini-1.5-flash")
-                chat = ChatGoogleGenerativeAI(
-                    google_api_key=gemini_key,
-                    model=model_name,
-                    temperature=temperature,
-                    max_retries=2,
-                )
-                return chat, f"Gemini ({model_name})"
-            except Exception as e:
-                logger.warning(f"Gemini provider init failed: {e}. Attempting fallback...")
+            candidate_gemini_models = [
+                os.environ.get("GEMINI_MODEL"),
+                "gemini-3.6-flash",
+                "gemini-2.5-flash",
+                "gemini-1.5-flash",
+            ]
+            for model_name in filter(None, candidate_gemini_models):
+                try:
+                    from langchain_google_genai import ChatGoogleGenerativeAI
+                    chat = ChatGoogleGenerativeAI(
+                        google_api_key=gemini_key,
+                        model=model_name,
+                        temperature=temperature,
+                        max_retries=1,
+                    )
+                    return chat, f"Gemini ({model_name})"
+                except Exception as e:
+                    logger.warning(f"Gemini ({model_name}) init failed: {e}")
 
         # Try Mistral
         mistral_key = os.environ.get("MISTRAL_API_KEY", "").strip()
@@ -97,11 +119,11 @@ class ProviderManager:
                     api_key=mistral_key,
                     model_name=model_name,
                     temperature=temperature,
-                    max_retries=2,
+                    max_retries=1,
                 )
                 return chat, f"Mistral ({model_name})"
             except Exception as e:
-                logger.warning(f"Mistral provider init failed: {e}. Attempting fallback...")
+                logger.warning(f"Mistral provider init failed: {e}")
 
         # Try OpenAI
         openai_key = os.environ.get("OPENAI_API_KEY", "").strip()
@@ -113,11 +135,11 @@ class ProviderManager:
                     api_key=openai_key,
                     model=model_name,
                     temperature=temperature,
-                    max_retries=2,
+                    max_retries=1,
                 )
                 return chat, f"OpenAI ({model_name})"
             except Exception as e:
-                logger.warning(f"OpenAI provider init failed: {e}. Attempting fallback...")
+                logger.warning(f"OpenAI provider init failed: {e}")
 
         return None, "Offline Heuristic Engine"
 

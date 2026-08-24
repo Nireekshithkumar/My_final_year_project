@@ -94,7 +94,21 @@ class NeuralCanvaAgent:
 
                 # Invoke model
                 response = self.model.invoke(messages)
-                reply_text = response.content if hasattr(response, 'content') else str(response)
+                raw_content = response.content if hasattr(response, 'content') else response
+                if isinstance(raw_content, list):
+                    text_parts = []
+                    for item in raw_content:
+                        if isinstance(item, dict) and "text" in item:
+                            text_parts.append(item["text"])
+                        elif isinstance(item, str):
+                            text_parts.append(item)
+                        else:
+                            text_parts.append(str(item))
+                    reply_text = "\n".join(text_parts)
+                elif isinstance(raw_content, dict) and "text" in raw_content:
+                    reply_text = str(raw_content["text"])
+                else:
+                    reply_text = str(raw_content)
 
                 return {
                     "text": reply_text,
