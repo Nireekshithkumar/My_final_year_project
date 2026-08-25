@@ -274,12 +274,32 @@ Apply `StandardScaler` for scale-sensitive models (Logistic Regression, SVM, KNN
         is_regression = "regress" in task.lower()
         model_type = "RandomForestRegressor" if is_regression else "RandomForestClassifier"
 
-        # Construct nodes
+        # Construct nodes with full visual and handle metadata
+        NODE_STYLE_MAP = {
+            "start": {"icon": "▶", "color": "#22c55e"},
+            "loadDataset": {"icon": "📂", "color": "#ff0071"},
+            "Encoder": {"icon": "🔠", "color": "#a855f7"},
+            "splitDataset": {"icon": "✂", "color": "#f59e0b"},
+            "RandomForestClassifier": {"icon": "🌲", "color": "#6366f1"},
+            "RandomForestRegressor": {"icon": "🌲", "color": "#0ea5e9"},
+            "evaluate": {"icon": "📊", "color": "#ff85be"},
+            "predict": {"icon": "🎯", "color": "#22c55e"},
+            "end": {"icon": "■", "color": "#ef4444"},
+        }
+
+        def make_outputs(ntype):
+            if ntype == "end":
+                return []
+            return [{"id": "next", "label": "Connection Task", "color": "#22c55e"}]
+
         nodes = [
             {
                 "id": "node_1",
                 "node_type": "start",
                 "label": "Start Task",
+                "icon": NODE_STYLE_MAP["start"]["icon"],
+                "iconColor": NODE_STYLE_MAP["start"]["color"],
+                "outputs": make_outputs("start"),
                 "params": {},
                 "position": {"x": 50, "y": 200},
             },
@@ -287,12 +307,15 @@ Apply `StandardScaler` for scale-sensitive models (Logistic Regression, SVM, KNN
                 "id": "node_2",
                 "node_type": "loadDataset",
                 "label": f"Load: {ds_name}",
+                "icon": NODE_STYLE_MAP["loadDataset"]["icon"],
+                "iconColor": NODE_STYLE_MAP["loadDataset"]["color"],
+                "outputs": make_outputs("loadDataset"),
                 "params": {"dataset_id": ds_id, "datasetId": ds_id},
-                "position": {"x": 260, "y": 200},
+                "position": {"x": 290, "y": 200},
             },
         ]
 
-        current_x = 470
+        current_x = 530
         curr_id = 3
 
         if cat_cols:
@@ -300,66 +323,91 @@ Apply `StandardScaler` for scale-sensitive models (Logistic Regression, SVM, KNN
                 "id": f"node_{curr_id}",
                 "node_type": "Encoder",
                 "label": "Categorical Encoder",
+                "icon": NODE_STYLE_MAP["Encoder"]["icon"],
+                "iconColor": NODE_STYLE_MAP["Encoder"]["color"],
+                "outputs": make_outputs("Encoder"),
                 "params": {"method": "label"},
                 "position": {"x": current_x, "y": 200},
             })
-            current_x += 210
+            current_x += 240
             curr_id += 1
 
         nodes.append({
             "id": f"node_{curr_id}",
             "node_type": "splitDataset",
             "label": f"Split Dataset (Target: {target})",
+            "icon": NODE_STYLE_MAP["splitDataset"]["icon"],
+            "iconColor": NODE_STYLE_MAP["splitDataset"]["color"],
+            "outputs": make_outputs("splitDataset"),
             "params": {"test_size": 0.2, "target_column": target, "target": target},
             "position": {"x": current_x, "y": 200},
         })
-        current_x += 210
+        current_x += 240
         curr_id += 1
 
         nodes.append({
             "id": f"node_{curr_id}",
             "node_type": model_type,
             "label": model_type,
+            "icon": NODE_STYLE_MAP.get(model_type, {}).get("icon", "🌲"),
+            "iconColor": NODE_STYLE_MAP.get(model_type, {}).get("color", "#6366f1"),
+            "outputs": make_outputs(model_type),
             "params": {"n_estimators": 100},
             "position": {"x": current_x, "y": 200},
         })
-        current_x += 210
+        current_x += 240
         curr_id += 1
 
         nodes.append({
             "id": f"node_{curr_id}",
             "node_type": "evaluate",
             "label": "Evaluate Metrics",
+            "icon": NODE_STYLE_MAP["evaluate"]["icon"],
+            "iconColor": NODE_STYLE_MAP["evaluate"]["color"],
+            "outputs": make_outputs("evaluate"),
             "params": {},
             "position": {"x": current_x, "y": 200},
         })
-        current_x += 210
+        current_x += 240
         curr_id += 1
 
         nodes.append({
             "id": f"node_{curr_id}",
             "node_type": "predict",
             "label": "Live Prediction API",
+            "icon": NODE_STYLE_MAP["predict"]["icon"],
+            "iconColor": NODE_STYLE_MAP["predict"]["color"],
+            "outputs": make_outputs("predict"),
             "params": {},
             "position": {"x": current_x, "y": 200},
         })
-        current_x += 210
+        current_x += 240
         curr_id += 1
 
         nodes.append({
             "id": f"node_{curr_id}",
             "node_type": "end",
             "label": "End Task",
+            "icon": NODE_STYLE_MAP["end"]["icon"],
+            "iconColor": NODE_STYLE_MAP["end"]["color"],
+            "outputs": make_outputs("end"),
             "params": {},
             "position": {"x": current_x, "y": 200},
         })
 
-        # Construct sequential edges
+        # Construct sequential edges connecting output handle to next node target
         edges = []
         for i in range(len(nodes) - 1):
+            src_id = nodes[i]["id"]
+            tgt_id = nodes[i + 1]["id"]
             edges.append({
-                "source": nodes[i]["id"],
-                "target": nodes[i + 1]["id"],
+                "id": f"e_{src_id}_{tgt_id}",
+                "source": src_id,
+                "target": tgt_id,
+                "sourceHandle": "next",
+                "targetHandle": None,
+                "type": "smoothstep",
+                "animated": True,
             })
 
         markdown = f"""### ⚡ AI-Generated Pipeline Specification
@@ -374,8 +422,9 @@ I designed an optimized **{task.capitalize()} Pipeline** for `{ds_name}`:
 - **Test Split:** `20% (test_size = 0.2)`
 - **Model Engine:** `{model_type}` (100 estimators)
 - **Validation:** Automated test set scoring + confusion matrix / residuals
+- **Connections:** **{len(edges)} automated edges** connecting all pipeline stages in sequence.
 
-Click **`Apply to Canvas`** below to load this pipeline into your React Flow canvas!
+Click **`Apply to Canvas`** below to load this pipeline with all nodes and connections into your React Flow canvas!
 """
 
         return {

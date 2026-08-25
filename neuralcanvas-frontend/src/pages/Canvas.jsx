@@ -328,7 +328,15 @@ const FlowCanvas = forwardRef(function FlowCanvas(
   const onConnect = useCallback(
     (params) =>
       setEdges((currentEdges) =>
-        addEdge({ ...params, markerEnd: { type: MarkerType.ArrowClosed } }, currentEdges)
+        addEdge(
+          {
+            ...params,
+            type: 'smoothstep',
+            animated: true,
+            markerEnd: { type: MarkerType.ArrowClosed },
+          },
+          currentEdges
+        )
       ),
     [setEdges]
   )
@@ -576,6 +584,12 @@ const FlowCanvas = forwardRef(function FlowCanvas(
         }
 
         const loadedNodes = (data.nodes || []).map((n) => {
+          const nType = n.data?.nodeType || n.type
+          const fallbackOutputs = nType === 'end' ? [] : (OUTPUT_PRESETS[nType] || OUTPUT_PRESETS.default)
+          const outputs = n.data?.outputs !== undefined && n.data?.outputs !== null
+            ? n.data.outputs
+            : fallbackOutputs
+
           let extraData = {}
           if (n.data?.nodeType === 'loadDataset') {
             const dsId = n.data?.datasetId || n.data?.dataset_id
@@ -608,6 +622,7 @@ const FlowCanvas = forwardRef(function FlowCanvas(
             ...n,
             data: {
               ...n?.data,
+              outputs,
               ...extraData,
               onPredict: handlePredict,
               onRunNode: handleRunNode,
@@ -617,12 +632,19 @@ const FlowCanvas = forwardRef(function FlowCanvas(
           }
         })
 
+        const loadedEdges = (data.edges || []).map((e) => ({
+          ...e,
+          type: e.type || 'smoothstep',
+          animated: e.animated !== undefined ? e.animated : true,
+          markerEnd: e.markerEnd || { type: MarkerType.ArrowClosed },
+        }))
+
         // Advance idCounter past the highest existing node number so that any
         // node added after this load won't collide with a backend ID.
         syncIdCounterWithNodes(loadedNodes)
 
         setNodes(loadedNodes)
-        setEdges(data.edges || [])
+        setEdges(loadedEdges)
 
         if (data.status === 'success') {
           if (onStatusChange) onStatusChange('success')

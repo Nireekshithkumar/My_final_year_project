@@ -218,12 +218,38 @@ class ApplyActionAPIView(APIView):
 
             graph, _ = Graph.objects.get_or_create(pipeline=pipeline)
 
+            # Map of default node styling
+            NODE_STYLE_MAP = {
+                "start": {"icon": "▶", "color": "#22c55e"},
+                "loadDataset": {"icon": "📂", "color": "#ff0071"},
+                "splitDataset": {"icon": "✂", "color": "#f59e0b"},
+                "Encoder": {"icon": "🔠", "color": "#a855f7"},
+                "StandardScaler": {"icon": "📏", "color": "#a855f7"},
+                "MinMaxScaler": {"icon": "📐", "color": "#a855f7"},
+                "RandomForestClassifier": {"icon": "🌲", "color": "#6366f1"},
+                "GradientBoostingClassifier": {"icon": "⚡", "color": "#6366f1"},
+                "LogisticRegression": {"icon": "📉", "color": "#6366f1"},
+                "DecisionTreeClassifier": {"icon": "🌳", "color": "#6366f1"},
+                "RandomForestRegressor": {"icon": "🌲", "color": "#0ea5e9"},
+                "GradientBoostingRegressor": {"icon": "⚡", "color": "#0ea5e9"},
+                "LinearRegression": {"icon": "📈", "color": "#0ea5e9"},
+                "evaluate": {"icon": "📊", "color": "#ff85be"},
+                "predict": {"icon": "🎯", "color": "#22c55e"},
+                "end": {"icon": "■", "color": "#ef4444"},
+            }
+
             # Convert AI node specs to React Flow compatible format
             rf_nodes = []
             for n in payload.get("nodes", []):
                 nid = n.get("id")
                 ntype = n.get("node_type")
                 label = n.get("label", ntype)
+                icon = n.get("icon") or NODE_STYLE_MAP.get(ntype, {}).get("icon", "⚙️")
+                icon_color = n.get("iconColor") or NODE_STYLE_MAP.get(ntype, {}).get("color", "#ff0071")
+                outputs = n.get("outputs")
+                if outputs is None:
+                    outputs = [] if ntype == "end" else [{"id": "next", "label": "Connection Task", "color": "#22c55e"}]
+
                 rf_nodes.append({
                     "id": nid,
                     "type": "taskNode",
@@ -232,6 +258,9 @@ class ApplyActionAPIView(APIView):
                         "nodeType": ntype,
                         "title": label,
                         "subtitle": label,
+                        "icon": icon,
+                        "iconColor": icon_color,
+                        "outputs": outputs,
                         "params": n.get("params", {}),
                         "datasetId": n.get("params", {}).get("datasetId") or payload.get("dataset_id"),
                         "dataset_id": n.get("params", {}).get("dataset_id") or payload.get("dataset_id"),
@@ -242,11 +271,17 @@ class ApplyActionAPIView(APIView):
 
             rf_edges = []
             for idx, e in enumerate(payload.get("edges", [])):
+                src = str(e["source"])
+                tgt = str(e["target"])
                 rf_edges.append({
-                    "id": f"e_{e['source']}_{e['target']}_{idx}",
-                    "source": e["source"],
-                    "target": e["target"],
+                    "id": e.get("id") or f"reactflow__edge-{src}next-{tgt}",
+                    "source": src,
+                    "target": tgt,
+                    "sourceHandle": e.get("sourceHandle", "next"),
+                    "targetHandle": e.get("targetHandle", None),
+                    "type": e.get("type", "smoothstep"),
                     "animated": True,
+                    "markerEnd": {"type": "arrowclosed"},
                 })
 
             graph.nodes = rf_nodes
@@ -257,7 +292,7 @@ class ApplyActionAPIView(APIView):
 
             return Response({
                 "success": True,
-                "message": f"Pipeline #{pipeline.id} successfully created!",
+                "message": f"Pipeline #{pipeline.id} successfully created with {len(rf_nodes)} blocks and {len(rf_edges)} connections!",
                 "pipeline_id": pipeline.id,
             })
 

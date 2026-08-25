@@ -499,7 +499,7 @@ export default function AICopilot() {
                     }}>
                       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <span style={{ fontSize: 12, fontWeight: 700, color: '#ff85be' }}>
-                          ⚡ Generated Pipeline DAG ({m.payload.nodes?.length || 0} blocks)
+                          ⚡ Generated Pipeline DAG ({m.payload.nodes?.length || 0} blocks, {m.payload.edges?.length || (m.payload.nodes ? m.payload.nodes.length - 1 : 0)} connections)
                         </span>
                         <span style={{ fontSize: 10.5, color: '#86efac', background: 'rgba(34,197,94,0.15)', padding: '2px 8px', borderRadius: 6 }}>
                           Target: {m.payload.target_column || 'Auto'}
@@ -518,8 +518,12 @@ export default function AICopilot() {
                               padding: '4px 8px',
                               borderRadius: 6,
                               fontWeight: 600,
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
                             }}>
-                              {n.label || n.node_type}
+                              <span>{n.icon || '⚙️'}</span>
+                              <span>{n.label || n.node_type}</span>
                             </span>
                             {i < (m.payload.nodes.length - 1) && <span style={{ color: '#ff0071', fontSize: 11 }}>➔</span>}
                           </div>
