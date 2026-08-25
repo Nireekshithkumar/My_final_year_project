@@ -4,6 +4,8 @@ from rest_framework import serializers
 from common.storage import StorageAbstraction
 from .models import Dataset
 
+from common.data_utils import DuplicateColumnsError
+
 logger = logging.getLogger(__name__)
 
 class DatasetUploadSerializer(serializers.ModelSerializer):
@@ -30,6 +32,9 @@ class DatasetUploadSerializer(serializers.ModelSerializer):
                 instance.row_count = len(df)
             
             instance.save(update_fields=['columns', 'row_count', 'column_types'])
+        except DuplicateColumnsError as e:
+            instance.delete()
+            raise serializers.ValidationError({"detail": e.message, "error": e.error_code, "duplicate_columns": e.duplicate_columns})
         except Exception as e:
             logger.warning(f"Metadata extraction for uploaded dataset '{instance.name}' warning: {e}")
         return instance

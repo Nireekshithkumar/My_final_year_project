@@ -3,6 +3,7 @@ from django.http import JsonResponse
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from accounts.authentication import CsrfExemptSessionAuthentication
+from common.data_utils import TargetColumnNotFoundError, DuplicateColumnsError
 from .models import Graph
 from .task import broadcast
 from .preprocessing_helpers import execute_single_node, save_node_artifacts
@@ -109,16 +110,57 @@ class NodeRunView(APIView):
                 "result": cleaned_result
             })
 
+        except TargetColumnNotFoundError as e:
+            err_msg = e.message
+            logger.warning(f"Target column error in node {node_id} ({node_type}): {err_msg}")
+            if 'data' in target_node:
+                target_node['data']['status'] = 'failed'
+                target_node['data']['lastError'] = err_msg
+                target_node['data']['errorType'] = e.error_code
+                target_node['data']['availableColumns'] = e.available_columns
+                graph.nodes = clean_for_json(nodes)
+                graph.save(update_fields=['nodes'])
+            broadcast(graph.pipeline_id, f"Node {target_title} Error: {err_msg}", stage="node_error")
+            resp = e.to_dict()
+            resp.update({
+                "detail": err_msg,
+                "node_id": node_id,
+                "node_type": node_type,
+                "errors": [err_msg]
+            })
+            return JsonResponse(resp, status=400)
+
+        except DuplicateColumnsError as e:
+            err_msg = e.message
+            logger.warning(f"Duplicate columns error in node {node_id} ({node_type}): {err_msg}")
+            if 'data' in target_node:
+                target_node['data']['status'] = 'failed'
+                target_node['data']['lastError'] = err_msg
+                target_node['data']['errorType'] = e.error_code
+                graph.nodes = clean_for_json(nodes)
+                graph.save(update_fields=['nodes'])
+            broadcast(graph.pipeline_id, f"Node {target_title} Error: {err_msg}", stage="node_error")
+            resp = e.to_dict()
+            resp.update({
+                "detail": err_msg,
+                "node_id": node_id,
+                "node_type": node_type,
+                "errors": [err_msg]
+            })
+            return JsonResponse(resp, status=400)
+
         except ValueError as e:
             err_msg = str(e)
             logger.warning(f"Validation error in node {node_id} ({node_type}): {err_msg}")
             if 'data' in target_node:
                 target_node['data']['status'] = 'failed'
+                target_node['data']['lastError'] = err_msg
                 graph.nodes = clean_for_json(nodes)
                 graph.save(update_fields=['nodes'])
             broadcast(graph.pipeline_id, f"Node {target_title} Error: {err_msg}", stage="node_error")
             return JsonResponse({
                 "detail": err_msg,
+                "message": err_msg,
                 "node_id": node_id,
                 "node_type": node_type,
                 "errors": [err_msg]
@@ -129,11 +171,13 @@ class NodeRunView(APIView):
             logger.error(f"Unexpected error executing node {node_id} ({node_type}): {err_msg}", exc_info=True)
             if 'data' in target_node:
                 target_node['data']['status'] = 'failed'
+                target_node['data']['lastError'] = err_msg
                 graph.nodes = clean_for_json(nodes)
                 graph.save(update_fields=['nodes'])
             broadcast(graph.pipeline_id, f"Node {target_title} Error: {err_msg}", stage="node_error")
             return JsonResponse({
                 "detail": err_msg,
+                "message": err_msg,
                 "node_id": node_id,
                 "node_type": node_type,
                 "errors": [err_msg]

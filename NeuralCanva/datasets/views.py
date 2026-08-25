@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
 from django.http import JsonResponse
 from accounts.authentication import CsrfExemptSessionAuthentication
-from common.storage import StorageAbstraction
+from common.data_utils import DuplicateColumnsError, TargetColumnNotFoundError
 from .models import Dataset
 from .serializers import DatasetUploadSerializer
 from .profiler import DatasetProfiler
@@ -39,6 +39,8 @@ class DatasetProfileView(APIView):
         try:
             profile_data = DatasetProfiler.profile_dataset(dataset)
             return Response(profile_data)
+        except (DuplicateColumnsError, TargetColumnNotFoundError) as e:
+            return JsonResponse(e.to_dict(), status=400)
         except Exception as e:
             return JsonResponse({"detail": str(e)}, status=400)
 
@@ -49,7 +51,8 @@ class DatasetTargetDetectionView(APIView):
 
     def get(self, request, id):
         dataset = get_object_or_404(Dataset, id=id, owner=request.user)
-        target_override = request.GET.get('target')
+        raw_target_override = request.GET.get('target')
+        target_override = str(raw_target_override).strip() if raw_target_override else None
         try:
             df = StorageAbstraction.read_dataset_df(dataset)
             suggestions = DatasetProfiler.suggest_targets(df)
@@ -64,5 +67,7 @@ class DatasetTargetDetectionView(APIView):
                 "detected_task": task_info,
                 "leakage_warnings": leakage_warnings,
             })
+        except (DuplicateColumnsError, TargetColumnNotFoundError) as e:
+            return JsonResponse(e.to_dict(), status=400)
         except Exception as e:
             return JsonResponse({"detail": str(e)}, status=400)

@@ -159,6 +159,35 @@ export default function TaskNode({ id, data = {}, selected }) {
         </span>
       </div>
 
+      {/* Clear Error Message Banner */}
+      {status === 'failed' && (data?.lastError || data?.error) && (
+        <div
+          style={{
+            background: 'rgba(239, 68, 68, 0.15)',
+            border: '1px solid rgba(239, 68, 68, 0.35)',
+            color: '#fca5a5',
+            fontSize: 10.5,
+            lineHeight: 1.35,
+            padding: '7px 9px',
+            borderRadius: 8,
+            marginBottom: 8,
+            wordBreak: 'break-word',
+          }}
+        >
+          <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+            <span>⚠️</span>
+            <span>{data?.errorType ? data.errorType.replace(/_/g, ' ') : 'Node Error'}</span>
+          </div>
+          <div>{data?.lastError || data?.error}</div>
+          {Array.isArray(data?.availableColumns) && data.availableColumns.length > 0 && (
+            <div style={{ marginTop: 4, fontSize: 9.5, color: '#f87171' }}>
+              Available columns: {data.availableColumns.slice(0, 4).join(', ')}
+              {data.availableColumns.length > 4 ? ` (+${data.availableColumns.length - 4} more)` : ''}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Run Node Action Button */}
       {nodeType !== "start" && nodeType !== "end" && nodeType !== "predict" && (
         <button

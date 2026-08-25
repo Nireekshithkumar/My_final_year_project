@@ -118,16 +118,19 @@ const FlowCanvas = forwardRef(function FlowCanvas(
 
       if (parentNode.data?.nodeType === 'splitDataset') {
         const allCols = getUpstreamColumns(parentNode.id, visited)
-        const target =
+        const rawTarget =
           parentNode.data.params?.target_column ||
           parentNode.data.params?.targetColumn ||
           parentNode.data.params?.target ||
           parentNode.data.params?.label_column ||
           parentNode.data.params?.label
+        const target = rawTarget ? String(rawTarget).trim() : ''
         return target ? allCols.filter((c) => c !== target) : allCols
       }
 
-      if (parentNode.data?.columns?.length > 0) return parentNode.data.columns
+      if (parentNode.data?.columns?.length > 0) {
+        return parentNode.data.columns.map((c) => String(c).trim()).filter(Boolean)
+      }
       return getUpstreamColumns(parentNode.id, visited)
     },
     [edges, nodes]
@@ -290,9 +293,14 @@ const FlowCanvas = forwardRef(function FlowCanvas(
         const { data } = await api.post(`/pipelines/${pipelineId}/nodes/${nodeId}/run/`)
         const result = data?.result || {}
         const newCols =
-          Array.isArray(result.columns) && result.columns.length > 0 ? result.columns : null
+          Array.isArray(result.columns) && result.columns.length > 0
+            ? result.columns.map((c) => String(c).trim())
+            : null
         updateNodeData(nodeId, {
           status: 'success',
+          lastError: null,
+          errorType: null,
+          availableColumns: null,
           ...(newCols ? { columns: newCols } : {}),
         })
         if (setLogs) {
@@ -307,9 +315,21 @@ const FlowCanvas = forwardRef(function FlowCanvas(
         }
         setRefreshTrigger((t) => t + 1)
       } catch (err) {
-        const msg = err.response?.data?.detail || err.response?.data?.error || 'Node execution failed.'
+        const resData = err.response?.data
+        const msg =
+          resData?.message ||
+          resData?.detail ||
+          resData?.error ||
+          (typeof resData === 'string' ? resData : 'Node execution failed.')
+        const errType = resData?.error || null
+        const availCols = resData?.available_columns || null
         setError(msg)
-        updateNodeData(nodeId, { status: 'failed' })
+        updateNodeData(nodeId, {
+          status: 'failed',
+          lastError: msg,
+          errorType: errType,
+          availableColumns: availCols,
+        })
         if (setLogs) {
           setLogs((prev) => [
             ...prev,
@@ -1058,14 +1078,23 @@ const FlowCanvas = forwardRef(function FlowCanvas(
                   {selectedNode.data?.nodeType === 'loadDataset' && (
                     <DatasetUpload
                       onUploaded={(dataset) => {
+                        const trimmedCols = (dataset.columns || []).map((c) => String(c).trim()).filter(Boolean);
+                        const cleanTypes = {};
+                        if (dataset.column_types && typeof dataset.column_types === 'object') {
+                          Object.entries(dataset.column_types).forEach(([k, v]) => {
+                            cleanTypes[String(k).trim()] = v;
+                          });
+                        }
                         updateNodeData(selectedNode.id, {
                           datasetId: String(dataset.id),
                           dataset_id: String(dataset.id),
                           filename: dataset.name,
-                          columns: dataset.columns,
-                          columnTypes: dataset.column_types,
+                          columns: trimmedCols,
+                          columnTypes: cleanTypes,
                           subtitle: dataset.name,
                           status: 'ready',
+                          lastError: null,
+                          errorType: null,
                         })
                         if (setActiveDatasetId) setActiveDatasetId(String(dataset.id))
                         setRefreshTrigger((t) => t + 1)

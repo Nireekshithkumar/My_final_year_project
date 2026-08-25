@@ -36,6 +36,142 @@ class RedisConfigurationTests(TestCase):
                         raise RuntimeError("REDIS_URL is not configured for production.")
 
 
+from common.data_utils import (
+    normalize_dataframe_columns,
+    resolve_target_column as sanitize_target_name,
+    TargetColumnNotFoundError,
+    DuplicateColumnsError,
+)
+from common.storage import StorageAbstraction
+from datasets.models import Dataset
+from django.core.files.uploadedfile import SimpleUploadedFile
+import pandas as pd
+import io
+
+
+class ColumnNormalizationAndTargetMismatchTests(TestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='colnormuser',
+            email='colnorm@example.com',
+            password='testpassword123'
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.user)
+
+    def test_whitespace_column_normalization(self):
+        """Test: normalize_dataframe_columns strips leading and trailing spaces from headers."""
+        raw_cols = [
+            'Area', ' Date', 'Region', ' Frequency', ' Estimated Employed',
+            ' Estimated Unemployment Rate (%)', ' Estimated Labour Participation Rate (%)'
+        ]
+        data = {col: [f"val_{i}" for i in range(10)] for col in raw_cols}
+        df = pd.DataFrame(data)
+
+        normalized_df = normalize_dataframe_columns(df)
+        expected_cols = [
+            'Area', 'Date', 'Region', 'Frequency', 'Estimated Employed',
+            'Estimated Unemployment Rate (%)', 'Estimated Labour Participation Rate (%)'
+        ]
+        self.assertEqual(list(normalized_df.columns), expected_cols)
+        self.assertIn('Estimated Labour Participation Rate (%)', normalized_df.columns)
+        # Data values must remain untouched
+        self.assertEqual(normalized_df['Area'].iloc[0], 'val_0')
+
+    def test_duplicate_headers_after_normalization_raises_error(self):
+        """Test: Duplicate column names created after stripping whitespace raises DuplicateColumnsError."""
+        dup_data = {
+            ' Col': [1, 2, 3],
+            'Col ': [4, 5, 6],
+            ' Other ': [7, 8, 9]
+        }
+        df = pd.DataFrame(dup_data)
+        with self.assertRaises(DuplicateColumnsError) as ctx:
+            normalize_dataframe_columns(df)
+        self.assertIn("Duplicate column names detected after sanitization", str(ctx.exception))
+        self.assertEqual(ctx.exception.error_code, "DUPLICATE_COLUMNS_DETECTED")
+        self.assertIn("Col", ctx.exception.duplicate_columns)
+
+    def test_split_dataset_with_whitespace_headers_and_target(self):
+        """Test: splitDataset recognizes ' Estimated Labour Participation Rate (%)' when target is given."""
+        raw_input = {
+            "dataframe": {
+                'Area': ['Rural', 'Urban'] * 5,
+                ' Date': ['2020-01-01'] * 10,
+                'Region': ['North'] * 10,
+                ' Frequency': ['Monthly'] * 10,
+                ' Estimated Employed': [100, 200] * 5,
+                ' Estimated Unemployment Rate (%)': [5.5, 6.2] * 5,
+                ' Estimated Labour Participation Rate (%)': [45.1, 46.2, 44.8, 47.0, 45.9, 46.1, 45.0, 46.5, 45.3, 46.8]
+            }
+        }
+        # 1. Target supplied with leading whitespace (matches stripped header)
+        res, dropped, train_len, test_len, cols = run_split_dataset(
+            raw_input,
+            {"target_column": " Estimated Labour Participation Rate (%)", "test_size": 0.2}
+        )
+        self.assertEqual(res["target_column"], "Estimated Labour Participation Rate (%)")
+        self.assertEqual(train_len, 8)
+        self.assertEqual(test_len, 2)
+        # cols are the normalized feature columns — target must NOT appear in them
+        self.assertNotIn("Estimated Labour Participation Rate (%)", cols)
+        # All returned feature columns must be stripped
+        for c in cols:
+            self.assertEqual(c, c.strip(), f"Column '{c}' still has whitespace")
+
+        # 2. Target supplied without leading whitespace
+        res2, dropped2, train_len2, test_len2, cols2 = run_split_dataset(
+            raw_input,
+            {"target_column": "Estimated Labour Participation Rate (%)", "test_size": 0.2}
+        )
+        self.assertEqual(res2["target_column"], "Estimated Labour Participation Rate (%)")
+        self.assertNotIn("Estimated Labour Participation Rate (%)", cols2)
+
+    def test_target_column_not_found_structured_error(self):
+        """Test: TargetColumnNotFoundError provides structured error dictionary."""
+        raw_input = {
+            "dataframe": {
+                ' Feature1': [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+                ' Feature2 ': [10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+            }
+        }
+        with self.assertRaises(TargetColumnNotFoundError) as ctx:
+            run_split_dataset(raw_input, {"target_column": " NonExistentTarget "})
+
+        err = ctx.exception
+        self.assertEqual(err.error_code, "TARGET_COLUMN_NOT_FOUND")
+        self.assertEqual(err.target_column, "NonExistentTarget")
+        self.assertEqual(err.available_columns, ["Feature1", "Feature2"])
+        err_dict = err.to_dict()
+        self.assertEqual(err_dict["error"], "TARGET_COLUMN_NOT_FOUND")
+        self.assertEqual(err_dict["message"], "Target column 'NonExistentTarget' was not found.")
+        self.assertEqual(err_dict["available_columns"], ["Feature1", "Feature2"])
+
+    def test_storage_abstraction_csv_and_excel_normalization(self):
+        """Test: StorageAbstraction normalizes headers for both CSV and Excel."""
+        # 1. CSV test
+        csv_content = b" Area, Date, Estimated Labour Participation Rate (%)\nRural,2020-01-01,45.5\nUrban,2020-01-02,46.2\n"
+        csv_file = SimpleUploadedFile("test_labour.csv", csv_content, content_type="text/csv")
+        ds_csv = Dataset.objects.create(owner=self.user, name="test_labour.csv", file=csv_file)
+
+        df_csv = StorageAbstraction.read_dataset_df(ds_csv)
+        self.assertEqual(list(df_csv.columns), ["Area", "Date", "Estimated Labour Participation Rate (%)"])
+
+        # 2. Excel test
+        excel_buffer = io.BytesIO()
+        df_to_excel = pd.DataFrame({
+            " Region ": ["East", "West"],
+            " Estimated Employed ": [500, 600]
+        })
+        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+            df_to_excel.to_excel(writer, index=False)
+        excel_file = SimpleUploadedFile("test_data.xlsx", excel_buffer.getvalue(), content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        ds_excel = Dataset.objects.create(owner=self.user, name="test_data.xlsx", file=excel_file)
+
+        df_excel = StorageAbstraction.read_dataset_df(ds_excel)
+        self.assertEqual(list(df_excel.columns), ["Region", "Estimated Employed"])
+
+
 class SplitDatasetNodeTests(TestCase):
     def setUp(self):
         self.sample_input = {
@@ -58,10 +194,11 @@ class SplitDatasetNodeTests(TestCase):
 
     def test_split_dataset_rejects_invalid_target(self):
         """Test 4: Split Dataset rejects nonexistent target column with list of available columns."""
-        with self.assertRaises(ValueError) as ctx:
+        with self.assertRaises(TargetColumnNotFoundError) as ctx:
             run_split_dataset(self.sample_input, {"target_column": "non_existent_column"})
-        self.assertIn("Target column 'non_existent_column' was not found in the dataset", str(ctx.exception))
-        self.assertIn("Available columns", str(ctx.exception))
+        self.assertIn("Target column 'non_existent_column' was not found", str(ctx.exception))
+        self.assertEqual(ctx.exception.error_code, "TARGET_COLUMN_NOT_FOUND")
+        self.assertEqual(ctx.exception.available_columns, ["feature_a", "feature_b", "target"])
 
     def test_split_dataset_succeeds_with_valid_target_and_aliases(self):
         """Test 5: Split Dataset succeeds with valid target and supports aliases."""

@@ -4,6 +4,8 @@ from django.http import JsonResponse
 from rest_framework.views import APIView
 from rest_framework.permissions import IsAuthenticated
 from accounts.authentication import CsrfExemptSessionAuthentication
+from common.storage import StorageAbstraction
+from common.data_utils import normalize_dataframe_columns
 from .models import Graph
 
 
@@ -32,16 +34,14 @@ class DatasetPreviewView(APIView):
                 t_data = target_node.get('data', {})
                 if t_data.get('nodeType') == 'loadDataset' and t_data.get('datasetId'):
                     from datasets.models import Dataset
-                    import os
                     try:
                         ds = Dataset.objects.get(id=t_data['datasetId'])
-                        if ds.file and os.path.exists(ds.file.path):
-                            loaded_df = pd.read_csv(ds.file.path)
-                            output_data = {
-                                "dataframe": loaded_df.to_dict(orient='list'),
-                                "columns": list(loaded_df.columns),
-                                "column_types": ds.column_types or {}
-                            }
+                        loaded_df = StorageAbstraction.read_dataset_df(ds)
+                        output_data = {
+                            "dataframe": loaded_df.to_dict(orient='list'),
+                            "columns": list(loaded_df.columns),
+                            "column_types": ds.column_types or {}
+                        }
                     except Exception:
                         pass
 
@@ -53,7 +53,7 @@ class DatasetPreviewView(APIView):
         # Build DataFrame from cached output structure
         df = None
         if "dataframe" in output_data:
-            df = pd.DataFrame(output_data["dataframe"])
+            df = normalize_dataframe_columns(pd.DataFrame(output_data["dataframe"]))
 
         elif "X_train" in output_data and "X_test" in output_data:
             # Split-format output — show train + test combined, labelled

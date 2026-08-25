@@ -268,8 +268,11 @@ Apply `StandardScaler` for scale-sensitive models (Logistic Regression, SVM, KNN
         ds_name = ds_context.get("name", "Active Dataset")
         task = ds_context.get("suggested_task", "classification")
         cols_raw = ds_context.get("columns")
-        cols_list = cols_raw if isinstance(cols_raw, list) else (ds_context.get("columns_list") or list(ds_context.get("column_types", {}).keys()) or ["target"])
-        target = ds_context.get("recommended_target") or (cols_list[-1] if cols_list else "target")
+        cols_list = [str(c).strip() for c in cols_raw] if isinstance(cols_raw, list) else (
+            [str(c).strip() for c in (ds_context.get("columns_list") or list(ds_context.get("column_types", {}).keys()))] or ["target"]
+        )
+        rec_target = ds_context.get("recommended_target")
+        target = str(rec_target).strip() if rec_target else (cols_list[-1] if cols_list else "target")
         cat_cols = ds_context.get("categorical_columns", [])
         is_regression = "regress" in task.lower()
         model_type = "RandomForestRegressor" if is_regression else "RandomForestClassifier"

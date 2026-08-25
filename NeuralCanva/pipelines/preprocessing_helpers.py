@@ -8,6 +8,12 @@ import numpy as np
 from django.conf import settings
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder, OrdinalEncoder, OneHotEncoder
+from common.data_utils import (
+    normalize_dataframe_columns,
+    resolve_target_column as sanitize_target_name,
+    TargetColumnNotFoundError,
+    DuplicateColumnsError,
+)
 from .json_helpers import clean_for_json, sanitize_execution_data
 
 logger = logging.getLogger(__name__)
@@ -137,6 +143,7 @@ def topological_sort(nodes, edges):
 def resolve_target_column(params):
     """
     Resolves the target column name supporting all common naming conventions.
+    Normalizes by stripping leading and trailing whitespace.
     """
     if not isinstance(params, dict):
         return None
@@ -159,7 +166,7 @@ def run_split_dataset(input_data, params):
     if raw_df_data is None:
         raise ValueError("No tabular data received by Split Dataset block. Connect a Load Dataset block upstream.")
 
-    df = pd.DataFrame(raw_df_data)
+    df = normalize_dataframe_columns(pd.DataFrame(raw_df_data))
     if df.empty or len(df) == 0:
         raise ValueError("Dataset is empty. Ensure the uploaded CSV contains valid data rows.")
 
@@ -169,10 +176,7 @@ def run_split_dataset(input_data, params):
 
     if target_column not in df.columns:
         available_cols = list(df.columns)
-        cols_preview = ", ".join([f"'{c}'" for c in available_cols[:10]])
-        if len(available_cols) > 10:
-            cols_preview += f" ... (+{len(available_cols) - 10} more)"
-        raise ValueError(f"Target column '{target_column}' was not found in the dataset. Available columns: [{cols_preview}]")
+        raise TargetColumnNotFoundError(target_column, available_cols)
 
     # Validate test_size
     test_size_raw = params.get('test_size', 0.2) if isinstance(params, dict) else 0.2
@@ -631,22 +635,22 @@ def _extract_df(input_data):
     if not input_data or not isinstance(input_data, dict):
         return pd.DataFrame()
     if "dataframe" in input_data and input_data["dataframe"]:
-        return pd.DataFrame(input_data["dataframe"])
+        return normalize_dataframe_columns(pd.DataFrame(input_data["dataframe"]))
     if "X_train" in input_data and "X_test" in input_data:
-        cols = input_data.get("columns", [f"feat_{i}" for i in range(len(input_data["X_train"][0]) if input_data["X_train"] else 0)])
+        cols = [str(c).strip() for c in input_data.get("columns", [f"feat_{i}" for i in range(len(input_data["X_train"][0]) if input_data["X_train"] else 0)])]
         tr = pd.DataFrame(input_data["X_train"], columns=cols)
         te = pd.DataFrame(input_data["X_test"], columns=cols)
         if "y_train" in input_data and input_data["y_train"]:
             tr["target"] = input_data["y_train"]
         if "y_test" in input_data and input_data["y_test"]:
             te["target"] = input_data["y_test"]
-        return pd.concat([tr, te], ignore_index=True)
+        return normalize_dataframe_columns(pd.concat([tr, te], ignore_index=True))
     if "X" in input_data and input_data["X"]:
-        cols = input_data.get("columns", [f"feat_{i}" for i in range(len(input_data["X"][0]) if input_data["X"] else 0)])
+        cols = [str(c).strip() for c in input_data.get("columns", [f"feat_{i}" for i in range(len(input_data["X"][0]) if input_data["X"] else 0)])]
         df = pd.DataFrame(input_data["X"], columns=cols)
         if "y" in input_data and input_data["y"]:
             df["target"] = input_data["y"]
-        return df
+        return normalize_dataframe_columns(df)
     return pd.DataFrame()
 
 
@@ -738,7 +742,8 @@ def run_missing_values_node(input_data, params):
 
 def run_histogram_node(input_data, params):
     df = _extract_df(input_data)
-    target_col = (params or {}).get("column") or (df.select_dtypes(include=[np.number]).columns[0] if not df.empty else None)
+    raw_col = (params or {}).get("column")
+    target_col = str(raw_col).strip() if raw_col else (df.select_dtypes(include=[np.number]).columns[0] if not df.empty else None)
     bins_count = int((params or {}).get("bins", 10))
 
     if not target_col or target_col not in df.columns:
@@ -761,7 +766,8 @@ def run_histogram_node(input_data, params):
 
 def run_boxplot_node(input_data, params):
     df = _extract_df(input_data)
-    target_col = (params or {}).get("column") or (df.select_dtypes(include=[np.number]).columns[0] if not df.empty else None)
+    raw_col = (params or {}).get("column")
+    target_col = str(raw_col).strip() if raw_col else (df.select_dtypes(include=[np.number]).columns[0] if not df.empty else None)
 
     if not target_col or target_col not in df.columns:
         raise ValueError(f"Column '{target_col}' not found for Boxplot.")

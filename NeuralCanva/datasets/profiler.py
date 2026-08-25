@@ -194,6 +194,9 @@ class DatasetProfiler:
     @staticmethod
     def detect_task(df, target_col=None):
         """Determines the ML task (Classification, Regression, Clustering, NLP) with confidence."""
+        if target_col is not None:
+            target_col = str(target_col).strip()
+
         if not target_col or target_col not in df.columns:
             # Check for pure text / NLP dataset
             text_cols = df.select_dtypes(include=['object']).columns
@@ -219,6 +222,9 @@ class DatasetProfiler:
         Detects potential data leakage where input features have suspicious correlation
         or mathematical identity with the target.
         """
+        if target_col is not None:
+            target_col = str(target_col).strip()
+
         if not target_col or target_col not in df.columns:
             return []
 

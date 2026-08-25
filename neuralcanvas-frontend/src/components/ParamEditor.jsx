@@ -5,8 +5,23 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
   const schema = PARAM_SCHEMAS[nodeType];
   if (!schema || schema.length === 0) return null;
 
-  const handleChange = (name, value) =>
-    onChange({ ...params, [name]: value });
+  // Trim and deduplicate columns received from backend/upstream
+  const cleanColumns = Array.from(
+    new Set((columns || []).map((c) => (c !== null && c !== undefined ? String(c).trim() : "")).filter(Boolean))
+  );
+
+  const cleanColumnTypes = {};
+  if (columnTypes && typeof columnTypes === "object") {
+    Object.entries(columnTypes).forEach(([k, v]) => {
+      cleanColumnTypes[String(k).trim()] = v;
+    });
+  }
+
+  const handleChange = (name, value) => {
+    const sanitizedVal =
+      name === "target_column" && typeof value === "string" ? value.trim() : value;
+    onChange({ ...params, [name]: sanitizedVal });
+  };
 
   const c = dark ? darkColors : lightColors;
 
@@ -57,7 +72,14 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
             <select
               value={
                 (field.name === "target_column"
-                  ? (params.target_column || params.targetColumn || params.target || params.label_column || params.label)
+                  ? (
+                      params.target_column ||
+                      params.targetColumn ||
+                      params.target ||
+                      params.label_column ||
+                      params.label ||
+                      ""
+                    ).toString().trim()
                   : params[field.name]) ?? field.default ?? ""
               }
               onChange={(e) => handleChange(field.name, e.target.value)}
@@ -67,7 +89,7 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
                 <>
                   <option value="">Select column</option>
 
-                  {columns.map((col) => (
+                  {cleanColumns.map((col) => (
                     <option key={col} value={col}>
                       {col}
                     </option>
@@ -86,9 +108,9 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
           {/* Multi Select */}
           {field.type === "multiselect" && (
             <FeatureSelector
-              columns={columns}
-              columnTypes={columnTypes}
-              selected={params[field.name] || []}
+              columns={cleanColumns}
+              columnTypes={cleanColumnTypes}
+              selected={(params[field.name] || []).map((s) => String(s).trim())}
               onChange={(next) => handleChange(field.name, next)}
               dark={dark}
               allowedTypes={field.allowedTypes}
@@ -107,13 +129,13 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
                 paddingRight: 4,
               }}
             >
-              {columns.length === 0 && (
+              {cleanColumns.length === 0 && (
                 <span style={{ fontSize: 11, color: c.label }}>
                   No feature columns found — connect this after Split Dataset.
                 </span>
               )}
 
-              {columns.map((col) => (
+              {cleanColumns.map((col) => (
                 <div key={col}>
                   <label
                     style={{
