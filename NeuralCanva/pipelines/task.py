@@ -178,12 +178,69 @@ def execute_graph(graph_id, start_from_node_id=None):
         graph.elapsed_seconds = elapsed
         graph.save(update_fields=['status', 'nodes', 'result', 'node_outputs', 'error', 'elapsed_seconds'])
 
+        # Extract structured experiment metadata
+        dataset_name_val = ""
+        dataset_fingerprint_val = ""
+        algo_name_val = ""
+        hyperparameters_val = {}
+        preprocessing_steps_val = []
+        metrics_val = {}
+        seed_val = None
+
+        for n in nodes:
+            if not isinstance(n, dict):
+                continue
+            data_n = n.get('data', {})
+            ntype = data_n.get('nodeType', '')
+            p_params = data_n.get('params', {}) or {}
+
+            if ntype == 'loadDataset':
+                dataset_name_val = data_n.get('filename') or data_n.get('subtitle') or str(p_params.get('dataset_id', ''))
+                ds_id = data_n.get('datasetId') or p_params.get('dataset_id')
+                if ds_id:
+                    import hashlib
+                    dataset_fingerprint_val = hashlib.sha256(str(ds_id).encode()).hexdigest()[:16]
+
+            elif ntype in ('StandardScaler', 'MinMaxScaler', 'RobustScaler', 'Encoder', 'RemoveDuplicates', 'DataTypeConverter', 'RenameColumns', 'DropConstantColumns', 'DropMissingColumns', 'OutlierHandler', 'RareCategoryEncoder', 'RowFilter', 'DataBalancing', 'PolynomialFeatures', 'PCA', 'VarianceThreshold', 'SelectKBest', 'RFE', 'LogTransform', 'Discretizer', 'CustomMathFeatures', 'MissingValues'):
+                preprocessing_steps_val.append({
+                    "node_id": n.get('id'),
+                    "type": ntype,
+                    "params": p_params
+                })
+
+            elif ntype in ('RandomForestClassifier', 'GradientBoostingClassifier', 'LogisticRegression', 'DecisionTreeClassifier', 'KNeighborsClassifier', 'SVC', 'LinearRegression', 'RandomForestRegressor', 'GradientBoostingRegressor', 'DenseNN', 'CNN', 'LSTM'):
+                algo_name_val = data_n.get('title') or ntype
+                hyperparameters_val = p_params
+                if 'random_state' in p_params:
+                    try:
+                        seed_val = int(p_params['random_state'])
+                    except Exception:
+                        pass
+
+        # Aggregate metrics from evaluate or model outputs
+        for out in node_outputs.values():
+            if isinstance(out, dict):
+                if 'metrics' in out and isinstance(out['metrics'], dict):
+                    metrics_val.update(out['metrics'])
+                for m_key in ('accuracy', 'precision', 'recall', 'f1', 'r2', 'mse', 'rmse', 'mae'):
+                    if m_key in out:
+                        metrics_val[m_key] = out[m_key]
+
         # Record Execution Run in History
         run_count = PipelineExecutionRun.objects.filter(pipeline=graph.pipeline).count()
-        PipelineExecutionRun.objects.create(
+        run_rec = PipelineExecutionRun.objects.create(
             pipeline=graph.pipeline,
+            owner=user,
             run_number=run_count + 1,
+            pipeline_version=1,
             status='success',
+            dataset_name=dataset_name_val or graph.pipeline.name,
+            dataset_fingerprint=dataset_fingerprint_val,
+            algorithm=algo_name_val or 'Standard ML',
+            hyperparameters=clean_for_json(hyperparameters_val),
+            preprocessing_steps=clean_for_json(preprocessing_steps_val),
+            metrics=clean_for_json(metrics_val),
+            random_seed=seed_val,
             start_time=timezone.now() - timezone.timedelta(seconds=elapsed),
             end_time=timezone.now(),
             elapsed_seconds=elapsed,
@@ -262,8 +319,11 @@ def execute_graph(graph_id, start_from_node_id=None):
             run_count = PipelineExecutionRun.objects.filter(pipeline=target_graph.pipeline).count()
             PipelineExecutionRun.objects.create(
                 pipeline=target_graph.pipeline,
+                owner=target_graph.pipeline.owner,
                 run_number=run_count + 1,
+                pipeline_version=1,
                 status='failed',
+                dataset_name=target_graph.pipeline.name,
                 start_time=timezone.now() - timezone.timedelta(seconds=elapsed),
                 end_time=timezone.now(),
                 elapsed_seconds=elapsed,

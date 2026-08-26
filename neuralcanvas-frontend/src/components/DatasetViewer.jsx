@@ -18,6 +18,7 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
   const [notRunYet, setNotRunYet] = useState(false);
   const [page, setPage] = useState(1);
   const [expandedCol, setExpandedCol] = useState(null);
+  const [partition, setPartition] = useState("X_train");
 
   const isDraggingRef = useRef(false);
   const startYRef = useRef(0);
@@ -32,7 +33,7 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
       setNotRunYet(false);
       try {
         const url = selectedNodeId
-          ? `/pipelines/${pipelineId}/nodes/${selectedNodeId}/preview/?page=${page}&page_size=30`
+          ? `/pipelines/${pipelineId}/nodes/${selectedNodeId}/preview/?page=${page}&page_size=30&partition=${partition}`
           : `/pipelines/${pipelineId}/nodes/preview/?page=${page}&page_size=30`;
         const { data } = await api.get(url);
         setPreviewData(data);
@@ -51,7 +52,7 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
     };
 
     fetchPreview();
-  }, [pipelineId, selectedNodeId, page, refreshTrigger]);
+  }, [pipelineId, selectedNodeId, page, refreshTrigger, partition]);
 
   // Mouse drag resizing handler
   const handleMouseDown = (e) => {
@@ -86,6 +87,7 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
   const columnStats = previewData?.column_stats || {};
   const totalRows = previewData?.total_rows || 0;
   const totalColumns = previewData?.total_columns || 0;
+  const currentPartition = previewData?.partition || null;
   const totalPages = Math.ceil(totalRows / 30) || 1;
 
   const currentHeight = isMaximized ? "75vh" : collapsed ? 38 : `${height}px`;
@@ -156,7 +158,31 @@ export default function DatasetViewer({ pipelineId, selectedNodeId, isDark, refr
           {totalRows > 0 && !collapsed && (
             <span style={{ fontSize: 11, color: "#94a3b8" }}>
               {totalRows} rows • {totalColumns} columns
+              {currentPartition && ` • ${currentPartition}`}
             </span>
+          )}
+          {/* Partition selector for split-dataset nodes */}
+          {currentPartition && !collapsed && (
+            <select
+              value={partition}
+              onChange={(e) => { setPartition(e.target.value); setPage(1); }}
+              style={{
+                fontSize: 11,
+                background: "rgba(30, 41, 59, 0.9)",
+                color: "#e2e8f0",
+                border: "1px solid rgba(255,255,255,0.15)",
+                borderRadius: 4,
+                padding: "2px 6px",
+                cursor: "pointer",
+                outline: "none",
+              }}
+            >
+              <option value="X_train">X_train</option>
+              <option value="X_test">X_test</option>
+              <option value="y_train">y_train</option>
+              <option value="y_test">y_test</option>
+              <option value="all">All (combined)</option>
+            </select>
           )}
         </div>
 

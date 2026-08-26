@@ -26,11 +26,13 @@ import { PARAM_SCHEMAS } from '../config/paramSchemas'
 import api from '../api/axios'
 import useStore from '../store/useStore'
 import DatasetProfileModal from '../components/DatasetProfileModal'
+import TemplatesModal from '../components/TemplatesModal'
 import AutoMLModal from '../components/AutoMLModal'
 import ModelCompareModal from '../components/ModelCompareModal'
 import ModelRegistryModal from '../components/ModelRegistryModal'
 import WhatIfModal from '../components/WhatIfModal'
 import AICopilotPanel from '../components/AICopilotPanel'
+import { validatePipeline } from '../utils/pipelineValidator'
 
 const nodeTypes = { taskNode: TaskNode }
 let idCounter = 1
@@ -64,6 +66,7 @@ const FlowCanvas = forwardRef(function FlowCanvas(
   {
     pipelineId,
     onStatusChange,
+    onValidationChange,
     isDark,
     refreshTrigger,
     setRefreshTrigger,
@@ -401,62 +404,131 @@ const FlowCanvas = forwardRef(function FlowCanvas(
     [onStatusChange, screenToFlowPosition, setNodes, handlePredict, handleRunNode, handleDownload]
   )
 
-  // Client-side defensive DAG validation
-  const validateGraphStructure = useCallback((nodeList, edgeList) => {
-    const nodeIds = new Set(nodeList.map((n) => String(n.id)))
+  // Enhanced client-side & server validation engine
+  const validateGraphStructure = useCallback((nodeList, edgeList, updateBadges = true) => {
+    const report = validatePipeline(nodeList, edgeList)
 
-    for (const e of edgeList) {
-      if (!nodeIds.has(String(e.source))) {
-        return { valid: false, error: `Connection references non-existent source block: ${e.source}` }
-      }
-      if (!nodeIds.has(String(e.target))) {
-        return { valid: false, error: `Connection references non-existent target block: ${e.target}` }
-      }
-      if (String(e.source) === String(e.target)) {
-        return { valid: false, error: `Self-loop connection detected on block: ${e.source}` }
+    if (updateBadges) {
+      const nodeIssues = report.nodeIssues || report.node_issues || {}
+      setNodes((currentNodes) =>
+        currentNodes.map((n) => {
+          const issues = nodeIssues[String(n.id)] || { errors: [], warnings: [] }
+          return {
+            ...n,
+            data: {
+              ...n.data,
+              validationErrors: issues.errors || [],
+              validationWarnings: issues.warnings || [],
+            },
+          }
+        })
+      )
+    }
+
+    if (onValidationChange) onValidationChange(report)
+    return report
+  }, [setNodes, onValidationChange])
+
+  const handleValidate = useCallback(async () => {
+    if (setLogs) {
+      setLogs((prev) => [
+        ...prev,
+        {
+          timestamp: new Date().toLocaleTimeString(),
+          stage: 'VALIDATE',
+          message: '🛡️ Running pipeline integrity & ML topology analysis…',
+        },
+      ])
+    }
+
+    // Client-side instant pass
+    const localReport = validateGraphStructure(nodes, edges, true)
+
+    let backendReport = null
+    if (pipelineId) {
+      try {
+        const { data } = await api.post(`/pipelines/${pipelineId}/validate/`, {
+          nodes,
+          edges,
+        })
+        backendReport = data
+      } catch (err) {
+        console.warn('Backend validation check skipped:', err)
       }
     }
 
-    const adj = {}
-    nodeList.forEach((n) => {
-      adj[String(n.id)] = []
-    })
-    edgeList.forEach((e) => {
-      if (adj[String(e.source)]) adj[String(e.source)].push(String(e.target))
-    })
+    const report = backendReport || localReport
+    const nodeIssues = report.nodeIssues || report.node_issues || {}
 
-    const WHITE = 0,
-      GREY = 1,
-      BLACK = 2
-    const color = {}
-    nodeList.forEach((n) => {
-      color[String(n.id)] = WHITE
-    })
+    setNodes((currentNodes) =>
+      currentNodes.map((n) => {
+        const issues = nodeIssues[String(n.id)] || { errors: [], warnings: [] }
+        return {
+          ...n,
+          data: {
+            ...n.data,
+            validationErrors: issues.errors || [],
+            validationWarnings: issues.warnings || [],
+          },
+        }
+      })
+    )
 
-    const dfs = (v) => {
-      color[v] = GREY
-      for (const w of adj[v] || []) {
-        if (color[w] === GREY) return true
-        if (color[w] === WHITE && dfs(w)) return true
+    if (onValidationChange) onValidationChange(report)
+
+    if (!report.valid) {
+      setError(report.summary || `${report.errors.length} validation error(s) found.`)
+      if (setLogs) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: 'ERROR',
+            message: `❌ Pipeline validation failed: ${report.errors.map((e) => e.message).join(' | ')}`,
+          },
+        ])
       }
-      color[v] = BLACK
-      return false
+    } else if (report.warnings && report.warnings.length > 0) {
+      setError('')
+      if (setLogs) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: 'WARNING',
+            message: `⚠️ Validation advisory: ${report.warnings.map((w) => w.message).join(' | ')}`,
+          },
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: 'SUCCESS',
+            message: '✓ Pipeline structure is executable with warnings.',
+          },
+        ])
+      }
+    } else {
+      setError('')
+      if (setLogs) {
+        setLogs((prev) => [
+          ...prev,
+          {
+            timestamp: new Date().toLocaleTimeString(),
+            stage: 'SUCCESS',
+            message: '✅ Pipeline validation passed with 0 errors and 0 warnings! Ready for execution.',
+          },
+        ])
+      }
     }
 
-    const cycleDetected = nodeList.some((n) => color[String(n.id)] === WHITE && dfs(String(n.id)))
-    if (cycleDetected) {
-      return { valid: false, error: '⚠️ Your pipeline contains a cycle (loop). Connections must flow strictly in one direction.' }
-    }
-    return { valid: true }
-  }, [])
+    return report
+  }, [nodes, edges, pipelineId, setLogs, validateGraphStructure, onValidationChange, setNodes])
 
   const saveGraph = useCallback(async () => {
     if (!pipelineId) return
 
-    const validation = validateGraphStructure(nodes, edges)
+    const validation = validateGraphStructure(nodes, edges, false)
     if (!validation.valid) {
       onStatusChange('failed')
-      setError(validation.error)
+      setError(validation.summary || 'Validation failed. Fix errors before saving.')
       return
     }
 
@@ -478,16 +550,17 @@ const FlowCanvas = forwardRef(function FlowCanvas(
   const runGraph = useCallback(async () => {
     if (!pipelineId) return
 
-    const validation = validateGraphStructure(nodes, edges)
+    const validation = validateGraphStructure(nodes, edges, true)
     if (!validation.valid) {
-      setError(validation.error)
+      const errMsg = validation.errors?.[0]?.message || validation.summary || 'Critical validation errors exist.'
+      setError(errMsg)
       if (setLogs) {
         setLogs((prev) => [
           ...prev,
           {
             timestamp: new Date().toLocaleTimeString(),
             stage: 'ERROR',
-            message: `⚠️ Validation error: ${validation.error}`,
+            message: `⛔ Execution blocked: ${errMsg}`,
           },
         ])
       }
@@ -565,11 +638,24 @@ const FlowCanvas = forwardRef(function FlowCanvas(
       saveGraph,
       runGraph,
       clearGraph,
+      validateGraph: handleValidate,
       zoomIn: () => zoomIn({ duration: 300 }),
       zoomOut: () => zoomOut({ duration: 300 }),
       fitView: () => fitView({ duration: 400, padding: 0.2 }),
+      applyPipeline: (newNodes, newEdges) => {
+        if (!Array.isArray(newNodes)) return
+        syncIdCounterWithNodes(newNodes)
+        setNodes(newNodes)
+        setEdges(newEdges || [])
+        setSelectedNodeId(null)
+        onStatusChange('idle')
+        setTimeout(() => {
+          fitView({ duration: 400, padding: 0.2 })
+          handleValidate()
+        }, 100)
+      },
     }),
-    [clearGraph, runGraph, saveGraph, zoomIn, zoomOut, fitView]
+    [clearGraph, handleValidate, runGraph, saveGraph, zoomIn, zoomOut, fitView, setNodes, setEdges, onStatusChange]
   )
 
   useEffect(() => {
@@ -1209,6 +1295,7 @@ export default function Canvas() {
   const [showBottomPanel, setShowBottomPanel] = useState(true)
 
   // Advanced ML Studio Modals
+  const [showTemplatesModal, setShowTemplatesModal] = useState(false)
   const [showProfileModal, setShowProfileModal] = useState(false)
   const [showAutoMLModal, setShowAutoMLModal] = useState(false)
   const [showCompareModal, setShowCompareModal] = useState(false)
@@ -1221,6 +1308,7 @@ export default function Canvas() {
   const [activeFeatures, setActiveFeatures] = useState([])
   const [activeNodesSnapshot, setActiveNodesSnapshot] = useState([])
   const [lastPipelineError, setLastPipelineError] = useState('')
+  const [validationState, setValidationState] = useState(null)
 
   useEffect(() => {
     const loadPipeline = async () => {
@@ -1478,6 +1566,8 @@ export default function Canvas() {
       <Toolbar
         pipelineName={workflowName}
         status={status}
+        validationState={validationState}
+        onValidate={() => flowRef.current?.validateGraph()}
         onSave={() => flowRef.current?.saveGraph()}
         onRun={() => flowRef.current?.runGraph()}
         onPause={handlePause}
@@ -1493,6 +1583,7 @@ export default function Canvas() {
         onZoomIn={() => flowRef.current?.zoomIn()}
         onZoomOut={() => flowRef.current?.zoomOut()}
         onFitView={() => flowRef.current?.fitView()}
+        onOpenTemplates={() => setShowTemplatesModal(true)}
         onOpenProfile={() => setShowProfileModal(true)}
         onOpenAutoML={() => setShowAutoMLModal(true)}
         onOpenCompare={() => setShowCompareModal(true)}
@@ -1502,6 +1593,8 @@ export default function Canvas() {
         onOpenReport={handleOpenReport}
         onExportProject={handleExportProject}
         onImportProject={handleImportProject}
+        onDownloadONNX={pipelineId ? () => { window.location.href = `/api/pipelines/${pipelineId}/download/onnx/` } : undefined}
+        onDownloadScript={pipelineId ? () => { window.location.href = `/api/pipelines/${pipelineId}/download/script/` } : undefined}
       />
 
       <ReactFlowProvider>
@@ -1509,6 +1602,7 @@ export default function Canvas() {
           ref={flowRef}
           pipelineId={pipelineId}
           onStatusChange={setStatus}
+          onValidationChange={setValidationState}
           isDark={isDark}
           refreshTrigger={refreshTrigger}
           setRefreshTrigger={setRefreshTrigger}
@@ -1526,9 +1620,26 @@ export default function Canvas() {
       </ReactFlowProvider>
 
       {/* Advanced Studio Modals */}
+      <TemplatesModal
+        isOpen={showTemplatesModal}
+        onClose={() => setShowTemplatesModal(false)}
+        onSelectTemplate={(nodes, edges, title) => {
+          flowRef.current?.applyPipeline(nodes, edges)
+          setLogs((prev) => [
+            ...prev,
+            {
+              timestamp: new Date().toLocaleTimeString(),
+              stage: 'TEMPLATE',
+              message: `📚 Loaded starter template '${title}' (${nodes.length} blocks) onto canvas.`,
+            },
+          ])
+        }}
+      />
+
       <DatasetProfileModal
         isOpen={showProfileModal}
         onClose={() => setShowProfileModal(false)}
+        pipelineId={pipelineId}
         datasetId={activeDatasetId}
         onApplyTarget={(targetCol) => {
           setShowProfileModal(false)
@@ -1566,8 +1677,11 @@ export default function Canvas() {
       <AICopilotPanel
         isOpen={showCopilotPanel}
         onClose={() => setShowCopilotPanel(false)}
+        pipelineId={pipelineId}
+        datasetId={activeDatasetId}
         pipelineNodes={activeNodesSnapshot}
         pipelineError={lastPipelineError}
+        onApplyPipeline={(newNodes, newEdges) => flowRef.current?.applyPipeline(newNodes, newEdges)}
       />
     </div>
   )

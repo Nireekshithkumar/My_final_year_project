@@ -41,6 +41,26 @@ class DuplicateColumnsError(ValueError):
         }
 
 
+class UnencodedFeaturesError(ValueError):
+    """
+    Exception raised when non-numeric text columns reach a scikit-learn estimator.
+    """
+    def __init__(self, columns: list, message: str = None):
+        self.columns = [str(c).strip() for c in (columns or [])]
+        self.error_code = "UNENCODED_FEATURES"
+        self.message = message or f"Some feature columns still contain text: {', '.join(self.columns)}."
+        self.suggestion = "Connect an encoder/date transformer before the model."
+        super().__init__(self.message)
+
+    def to_dict(self):
+        return {
+            "error": self.error_code,
+            "message": self.message,
+            "columns": self.columns,
+            "suggestion": self.suggestion,
+        }
+
+
 def normalize_dataframe_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Normalizes all DataFrame column names by stripping leading/trailing whitespace.
@@ -84,3 +104,54 @@ def resolve_target_column(params: dict) -> str:
         if val is not None and isinstance(val, str) and val.strip():
             return val.strip()
     return None
+
+
+def is_date_series(series: pd.Series) -> bool:
+    """
+    Checks if a series contains date/datetime strings (e.g. '30-06-2019', '2020-01-01').
+    Returns True if at least 70% of non-null values can be parsed as dates.
+    """
+    if series is None or len(series) == 0:
+        return False
+    if pd.api.types.is_datetime64_any_dtype(series):
+        return True
+    if not (pd.api.types.is_object_dtype(series) or pd.api.types.is_string_dtype(series)):
+        return False
+
+    sample = series.dropna().astype(str).str.strip()
+    if len(sample) == 0:
+        return False
+    
+    # Quick regex check for common date patterns (DD-MM-YYYY, YYYY-MM-DD, DD/MM/YYYY, etc.)
+    date_pattern_matches = sample.str.match(r'^\d{1,4}[-/\.]\d{1,2}[-/\.]\d{1,4}')
+    if date_pattern_matches.mean() < 0.5:
+        return False
+
+    try:
+        parsed = pd.to_datetime(sample.iloc[:50], format='mixed', errors='coerce')
+        return parsed.notna().mean() >= 0.7
+    except Exception:
+        return False
+
+
+def extract_date_features(df: pd.DataFrame, date_columns: list) -> pd.DataFrame:
+    """
+    Decomposes date-like columns into numerical features: _year, _month, _day, _dayofweek.
+    Drops original string date columns to ensure only numeric data is passed to estimators.
+    """
+    if df is None or not isinstance(df, pd.DataFrame) or not date_columns:
+        return df
+
+    df_out = df.copy()
+    for col in date_columns:
+        if col in df_out.columns:
+            try:
+                parsed = pd.to_datetime(df_out[col], format='mixed', errors='coerce')
+                df_out[f"{col}_year"] = parsed.dt.year.fillna(2000).astype(int)
+                df_out[f"{col}_month"] = parsed.dt.month.fillna(1).astype(int)
+                df_out[f"{col}_day"] = parsed.dt.day.fillna(1).astype(int)
+                df_out[f"{col}_dayofweek"] = parsed.dt.dayofweek.fillna(0).astype(int)
+                df_out = df_out.drop(columns=[col])
+            except Exception as e:
+                logger.warning(f"Could not extract date features for column '{col}': {e}")
+    return df_out

@@ -16,6 +16,33 @@ const SECTIONS = [
     ],
   },
   {
+    title: "Advanced Data Cleaning",
+    items: [
+      { type: "RemoveDuplicates", label: "Remove Duplicates", sub: "Drop duplicate rows", icon: "🧹", color: "#ec4899", isNew: true },
+      { type: "DataTypeConverter", label: "Type Converter", sub: "Cast column types", icon: "🔄", color: "#ec4899", isNew: true },
+      { type: "RenameColumns", label: "Rename Columns", sub: "Rename feature keys", icon: "🏷️", color: "#ec4899", isNew: true },
+      { type: "DropConstantColumns", label: "Drop Constant", sub: "Remove 0-variance cols", icon: "🚫", color: "#ec4899", isNew: true },
+      { type: "DropMissingColumns", label: "Drop High Nulls", sub: "Filter high missing cols", icon: "🗑️", color: "#ec4899", isNew: true },
+      { type: "OutlierHandler", label: "Outlier Handler", sub: "IQR / Z-Score clipping", icon: "🎯", color: "#ec4899", isNew: true },
+      { type: "RareCategoryEncoder", label: "Rare Categories", sub: "Group infrequent labels", icon: "🧩", color: "#ec4899", isNew: true },
+      { type: "RowFilter", label: "Row Filter", sub: "Custom rule filter", icon: "🔍", color: "#ec4899", isNew: true },
+      { type: "DataBalancing", label: "Data Balancing", sub: "SMOTE / Resampling", icon: "⚖️", color: "#ec4899", isNew: true },
+    ],
+  },
+  {
+    title: "Feature Engineering",
+    items: [
+      { type: "PolynomialFeatures", label: "Polynomial Features", sub: "Non-linear terms & cross", icon: "⚡", color: "#8b5cf6", isNew: true },
+      { type: "PCA", label: "PCA Reduction", sub: "Principal components", icon: "📉", color: "#8b5cf6", isNew: true },
+      { type: "VarianceThreshold", label: "Variance Threshold", sub: "Remove low variance", icon: "🛡️", color: "#8b5cf6", isNew: true },
+      { type: "SelectKBest", label: "SelectKBest", sub: "Top k features (ANOVA/F)", icon: "⭐", color: "#8b5cf6", isNew: true },
+      { type: "RFE", label: "RFE Elimination", sub: "Recursive feature pruning", icon: "✂️", color: "#8b5cf6", isNew: true },
+      { type: "LogTransform", label: "Log Transform", sub: "log1p & sqrt unskewing", icon: "📐", color: "#8b5cf6", isNew: true },
+      { type: "Discretizer", label: "Discretizer / Bins", sub: "KBins continuous binning", icon: "📊", color: "#8b5cf6", isNew: true },
+      { type: "CustomMathFeatures", label: "Math Feature", sub: "Formula evaluation", icon: "🧮", color: "#8b5cf6", isNew: true },
+    ],
+  },
+  {
     title: "EDA & Analytics",
     items: [
       { type: "DescribeStats", label: "Describe Stats", sub: "Mean, std, quartiles", icon: "📋", color: "#06b6d4" },
@@ -56,10 +83,12 @@ const SECTIONS = [
     ],
   },
   {
-    title: "Evaluation & Tuning",
+    title: "AutoML & Tuning",
     items: [
+      { type: "AutoML", label: "AutoML Engine", sub: "Auto algorithm selection", icon: "🤖", color: "#ec4899", isNew: true },
+      { type: "ModelComparison", label: "Model Comparison", sub: "Multi-model tournament", icon: "🏆", color: "#ec4899", isNew: true },
+      { type: "HyperparamTuning", label: "Hyperparam Tuning", sub: "Grid / Random CV search", icon: "🎛", color: "#ec4899" },
       { type: "evaluate", label: "Evaluate Metrics", sub: "Accuracy, F1, Confusion Matrix", icon: "📊", color: "#ff85be" },
-      { type: "HyperparamTuning", label: "Auto Tuning", sub: "Grid / Random CV search", icon: "🎛", color: "#ec4899" },
       { type: "predict", label: "Live Predict", sub: "Inference endpoint", icon: "🎯", color: "#22c55e" },
     ],
   },
@@ -222,8 +251,24 @@ export default function NodePalette({ width } = {}) {
                       whiteSpace: "nowrap",
                       overflow: "hidden",
                       textOverflow: "ellipsis",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 5,
                     }}>
-                      {item.label}
+                      <span>{item.label}</span>
+                      {item.isNew && (
+                        <span style={{
+                          fontSize: 8.5,
+                          fontWeight: 800,
+                          background: "linear-gradient(135deg, #ec4899, #8b5cf6)",
+                          color: "#fff",
+                          padding: "1px 5px",
+                          borderRadius: 4,
+                          letterSpacing: 0.4,
+                        }}>
+                          NEW
+                        </span>
+                      )}
                     </div>
                     <div style={{
                       fontSize: 9.5,

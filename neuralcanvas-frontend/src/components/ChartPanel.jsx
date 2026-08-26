@@ -918,6 +918,112 @@ export default function ChartPanel({ pipelineId, selectedNodeId, isDark = true }
                   </>}
                 </div>
 
+                {/* AutoML & Model Comparison Leaderboard */}
+                {(data?.leaderboard || metrics?.leaderboard) && (
+                  <div style={{
+                    background: "rgba(8,12,20,0.85)",
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: "1px solid rgba(236,72,153,0.25)",
+                    boxShadow: "0 0 20px rgba(236,72,153,0.06)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 10,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: "#f472b6", letterSpacing: 0.5 }}>
+                        🏆 ALGORITHM COMPARISON LEADERBOARD
+                      </span>
+                      {data?.best_algorithm && (
+                        <span style={{ fontSize: 10, background: "rgba(34,197,94,0.18)", color: "#4ade80", padding: "2px 8px", borderRadius: 12, fontWeight: 700 }}>
+                          Winner: {data.best_algorithm}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", fontSize: 11, borderCollapse: "collapse", textAlign: "left" }}>
+                        <thead>
+                          <tr style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", color: "#94a3b8" }}>
+                            <th style={{ padding: "6px 8px" }}>Rank</th>
+                            <th style={{ padding: "6px 8px" }}>Algorithm</th>
+                            <th style={{ padding: "6px 8px" }}>Score</th>
+                            <th style={{ padding: "6px 8px" }}>Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(data?.leaderboard || metrics?.leaderboard).map((item, idx) => (
+                            <tr key={idx} style={{
+                              borderBottom: "1px solid rgba(255,255,255,0.04)",
+                              background: idx === 0 ? "rgba(34,197,94,0.06)" : "transparent"
+                            }}>
+                              <td style={{ padding: "6px 8px", fontWeight: 700, color: idx === 0 ? "#4ade80" : "#94a3b8" }}>
+                                {idx === 0 ? "🥇 #1" : `#${idx + 1}`}
+                              </td>
+                              <td style={{ padding: "6px 8px", color: "#f8fafc", fontWeight: idx === 0 ? 700 : 400 }}>
+                                {item.algorithm}
+                              </td>
+                              <td style={{ padding: "6px 8px", color: idx === 0 ? "#4ade80" : "#38bdf8", fontWeight: 700 }}>
+                                {item.f1 !== undefined ? `F1: ${item.f1}` : item.accuracy !== undefined ? `Acc: ${item.accuracy}` : item.r2 !== undefined ? `R²: ${item.r2}` : "—"}
+                              </td>
+                              <td style={{ padding: "6px 8px" }}>
+                                <span style={{
+                                  fontSize: 9.5,
+                                  padding: "2px 6px",
+                                  borderRadius: 4,
+                                  background: item.status === "success" ? "rgba(34,197,94,0.18)" : "rgba(239,68,68,0.18)",
+                                  color: item.status === "success" ? "#4ade80" : "#fca5a5"
+                                }}>
+                                  {item.status}
+                                </span>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Hyperparameter Tuning Results */}
+                {(data?.best_params || metrics?.best_params) && (
+                  <div style={{
+                    background: "rgba(8,12,20,0.85)",
+                    padding: "12px 14px",
+                    borderRadius: 12,
+                    border: "1px solid rgba(168,85,247,0.25)",
+                    boxShadow: "0 0 20px rgba(168,85,247,0.06)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 8,
+                  }}>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                      <span style={{ fontSize: 11, fontWeight: 800, color: "#c084fc", letterSpacing: 0.5 }}>
+                        🎛 OPTIMIZED HYPERPARAMETERS
+                      </span>
+                      {(data?.best_score !== undefined || metrics?.best_score !== undefined) && (
+                        <span style={{ fontSize: 10, background: "rgba(168,85,247,0.18)", color: "#c084fc", padding: "2px 8px", borderRadius: 12, fontWeight: 700 }}>
+                          Best CV Score: {data?.best_score ?? metrics?.best_score}
+                        </span>
+                      )}
+                    </div>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginTop: 4 }}>
+                      {Object.entries(data?.best_params || metrics?.best_params).map(([paramKey, paramVal]) => (
+                        <div key={paramKey} style={{
+                          fontSize: 10.5,
+                          background: "rgba(255,255,255,0.03)",
+                          border: "1px solid rgba(255,255,255,0.08)",
+                          padding: "4px 8px",
+                          borderRadius: 6,
+                          color: "#f1f5f9"
+                        }}>
+                          <span style={{ color: "#a855f7", fontWeight: 700 }}>{paramKey}: </span>
+                          <span>{String(paramVal)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* Confusion Matrix */}
                 {isClassification && confusionMatrix && Array.isArray(confusionMatrix) && (
                   <div style={{

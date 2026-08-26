@@ -13,6 +13,9 @@ from common.data_utils import (
     resolve_target_column as sanitize_target_name,
     TargetColumnNotFoundError,
     DuplicateColumnsError,
+    UnencodedFeaturesError,
+    is_date_series,
+    extract_date_features,
 )
 from .json_helpers import clean_for_json, sanitize_execution_data
 
@@ -228,18 +231,40 @@ def run_split_dataset(input_data, params):
 
 # ─── ENCODER NODE ─────────────────────────────────────────────────────────────
 
+def _auto_detect_encodable_columns(df: pd.DataFrame, exclude_cols: list = None) -> tuple:
+    """
+    Returns (date_cols, cat_cols) where:
+      date_cols  – columns recognised as date-like strings
+      cat_cols   – remaining object/category columns that need encoding
+    Excludes any column listed in exclude_cols (e.g. the target).
+    """
+    exclude_set = set(c.strip() for c in (exclude_cols or []))
+    date_cols = []
+    cat_cols = []
+    for col in df.columns:
+        if col in exclude_set:
+            continue
+        if is_date_series(df[col]):
+            date_cols.append(col)
+        elif pd.api.types.is_object_dtype(df[col]) or pd.api.types.is_string_dtype(df[col]):
+            cat_cols.append(col)
+    return date_cols, cat_cols
+
+
 def run_encoder_node(input_data, params):
     params = params or {}
     method = params.get('method', 'OneHot')
-    features = params.get('features', [])
-    target_col = resolve_target_column(params)
+    # Strip whitespace from every configured feature name to match normalised column names
+    raw_features = params.get('features', []) or []
+    features = [f.strip() for f in raw_features if isinstance(f, str) and f.strip()]
+    target_col = sanitize_target_name(params)
 
     is_split = "X_train" in input_data and "X_test" in input_data
 
     if is_split:
         columns = input_data.get('columns', [])
-        df_train = pd.DataFrame(input_data['X_train'], columns=columns)
-        df_test = pd.DataFrame(input_data['X_test'], columns=columns)
+        df_train = normalize_dataframe_columns(pd.DataFrame(input_data['X_train'], columns=columns))
+        df_test = normalize_dataframe_columns(pd.DataFrame(input_data['X_test'], columns=columns))
         y_train = pd.Series(input_data['y_train'])
         y_test = pd.Series(input_data['y_test'])
 
@@ -247,8 +272,36 @@ def run_encoder_node(input_data, params):
         mappings = {}
         global_mean = 0.0
 
+        # ── Step 1: Date columns ─────────────────────────────────────────────
+        # Always expand date-like columns first (even if the user listed them in features)
+        if features:
+            # Partition user-specified features into dates vs non-date
+            date_feats = [f for f in features if f in df_train.columns and is_date_series(df_train[f])]
+            encode_feats = [f for f in features if f in df_train.columns and not is_date_series(df_train[f])]
+        else:
+            # Auto-detect all non-target object/date columns
+            date_feats, encode_feats = _auto_detect_encodable_columns(
+                df_train, exclude_cols=[target_col] if target_col else []
+            )
+
+        if date_feats:
+            df_train = extract_date_features(df_train, date_feats)
+            df_test = extract_date_features(df_test, date_feats)
+            for col in date_feats:
+                mappings[col] = "date_decomposed"
+
+        # ── Step 2: Categorical encoding ─────────────────────────────────────
+        # Restrict to columns that actually exist in the (possibly date-expanded) DataFrame
+        encode_feats = [f for f in encode_feats if f in df_train.columns]
+
+        if not encode_feats and not date_feats:
+            raise ValueError(
+                "Encoder: no encodable columns found. "
+                "Please select columns in the Encoder node or ensure the upstream data contains text/categorical columns."
+            )
+
         if method == 'OneHot':
-            valid_feats = [f for f in features if f in df_train.columns]
+            valid_feats = [f for f in encode_feats if f in df_train.columns]
             if valid_feats:
                 encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
                 train_encoded = encoder.fit_transform(df_train[valid_feats].astype(str))
@@ -267,7 +320,7 @@ def run_encoder_node(input_data, params):
                     mappings[col] = encoder.categories_[idx].tolist()
 
         elif method == 'Label':
-            for col in features:
+            for col in encode_feats:
                 if col in df_train.columns:
                     le = LabelEncoder()
                     df_train[col] = le.fit_transform(df_train[col].astype(str))
@@ -278,7 +331,7 @@ def run_encoder_node(input_data, params):
                     mappings[col] = {str(cat): float(idx) for idx, cat in enumerate(le.classes_)}
 
         elif method == 'Ordinal':
-            valid_feats = [f for f in features if f in df_train.columns]
+            valid_feats = [f for f in encode_feats if f in df_train.columns]
             if valid_feats:
                 oe = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
                 df_train[valid_feats] = oe.fit_transform(df_train[valid_feats].astype(str))
@@ -289,7 +342,7 @@ def run_encoder_node(input_data, params):
 
         elif method == 'Target':
             global_mean = float(y_train.mean()) if len(y_train) > 0 else 0.0
-            for col in features:
+            for col in encode_feats:
                 if col in df_train.columns:
                     mean_target = y_train.groupby(df_train[col]).mean()
                     df_train[col] = df_train[col].map(mean_target).fillna(global_mean)
@@ -305,9 +358,10 @@ def run_encoder_node(input_data, params):
             "y_train": y_train.tolist(),
             "y_test": y_test.tolist(),
             "columns": list(df_train.columns),
+            "target_column": input_data.get("target_column", ""),
             "encoder_params": {
                 "method": method,
-                "features": features,
+                "features": list(set(date_feats + encode_feats)),
                 "mappings": mappings,
                 "global_mean": global_mean
             }
@@ -315,13 +369,36 @@ def run_encoder_node(input_data, params):
         return result, before_cols, after_cols
 
     else:
-        df = pd.DataFrame(input_data.get('dataframe', {}))
+        df = normalize_dataframe_columns(pd.DataFrame(input_data.get('dataframe', {})))
         before_cols = len(df.columns)
         mappings = {}
         global_mean = 0.0
 
+        # ── Step 1: Date columns ─────────────────────────────────────────────
+        if features:
+            date_feats = [f for f in features if f in df.columns and is_date_series(df[f])]
+            encode_feats = [f for f in features if f in df.columns and not is_date_series(df[f])]
+        else:
+            date_feats, encode_feats = _auto_detect_encodable_columns(
+                df, exclude_cols=[target_col] if target_col else []
+            )
+
+        if date_feats:
+            df = extract_date_features(df, date_feats)
+            for col in date_feats:
+                mappings[col] = "date_decomposed"
+
+        # ── Step 2: Categorical encoding ─────────────────────────────────────
+        encode_feats = [f for f in encode_feats if f in df.columns]
+
+        if not encode_feats and not date_feats:
+            raise ValueError(
+                "Encoder: no encodable columns found. "
+                "Please select columns in the Encoder node or ensure the upstream data contains text/categorical columns."
+            )
+
         if method == 'OneHot':
-            valid_feats = [f for f in features if f in df.columns]
+            valid_feats = [f for f in encode_feats if f in df.columns]
             if valid_feats:
                 encoder = OneHotEncoder(sparse_output=False, handle_unknown='ignore')
                 encoded = encoder.fit_transform(df[valid_feats].astype(str))
@@ -335,14 +412,14 @@ def run_encoder_node(input_data, params):
                     mappings[col] = encoder.categories_[idx].tolist()
 
         elif method == 'Label':
-            for col in features:
+            for col in encode_feats:
                 if col in df.columns:
                     le = LabelEncoder()
                     df[col] = le.fit_transform(df[col].astype(str))
                     mappings[col] = {str(cat): float(idx) for idx, cat in enumerate(le.classes_)}
 
         elif method == 'Ordinal':
-            valid_feats = [f for f in features if f in df.columns]
+            valid_feats = [f for f in encode_feats if f in df.columns]
             if valid_feats:
                 oe = OrdinalEncoder(handle_unknown='use_encoded_value', unknown_value=-1)
                 df[valid_feats] = oe.fit_transform(df[valid_feats].astype(str))
@@ -353,7 +430,7 @@ def run_encoder_node(input_data, params):
             if target_col and target_col in df.columns:
                 target_series = df[target_col]
                 global_mean = float(target_series.mean())
-                for col in features:
+                for col in encode_feats:
                     if col in df.columns:
                         mean_target = target_series.groupby(df[col]).mean()
                         df[col] = df[col].map(mean_target).fillna(global_mean)
@@ -366,12 +443,14 @@ def run_encoder_node(input_data, params):
             "columns": list(df.columns),
             "encoder_params": {
                 "method": method,
-                "features": features,
+                "features": list(set(date_feats + encode_feats)),
                 "mappings": mappings,
                 "global_mean": global_mean
             }
         }
         return result, before_cols, after_cols
+
+
 
 
 # ─── UNIFIED SINGLE NODE EXECUTION ENGINE ──────────────────────────────────────
@@ -448,7 +527,116 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
         result, before_cols, after_cols = run_encoder_node(input_data, params)
         artifacts['node_json'] = result['encoder_params']
         artifacts['features'] = result.get('columns', [])
-        msg = f"One-Hot encoding completed. Features: {', '.join(params.get('features', []))}. Columns: {before_cols} → {after_cols}"
+        enc_method = result.get('encoder_params', {}).get('method', 'Encoder')
+        enc_feats = result.get('encoder_params', {}).get('features', [])
+        msg = f"{enc_method} encoding completed. Features: {', '.join(enc_feats)}. Columns: {before_cols} → {after_cols}"
+        return result, artifacts, msg, node_type
+
+    # ── Advanced Data Cleaning Nodes ──
+    from .cleaning_and_features import (
+        run_remove_duplicates_node,
+        run_datatype_converter_node,
+        run_rename_columns_node,
+        run_drop_constant_columns_node,
+        run_drop_missing_columns_node,
+        run_outlier_handler_node,
+        run_rare_category_encoder_node,
+        run_row_filter_node,
+        run_data_balancing_node,
+        run_polynomial_features_node,
+        run_pca_node,
+        run_variance_threshold_node,
+        run_select_kbest_node,
+        run_rfe_node,
+        run_log_transform_node,
+        run_discretizer_node,
+        run_custom_math_features_node,
+    )
+
+    if node_type == 'RemoveDuplicates':
+        result, msg = run_remove_duplicates_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'DataTypeConverter':
+        result, msg = run_datatype_converter_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'RenameColumns':
+        result, msg = run_rename_columns_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'DropConstantColumns':
+        result, msg = run_drop_constant_columns_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'DropMissingColumns':
+        result, msg = run_drop_missing_columns_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type in ('OutlierHandler', 'OutlierDetection'):
+        result, msg = run_outlier_handler_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'RareCategoryEncoder':
+        result, msg = run_rare_category_encoder_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'RowFilter':
+        result, msg = run_row_filter_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'DataBalancing':
+        result, msg = run_data_balancing_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    # ── Advanced Feature Engineering Nodes ──
+    if node_type == 'PolynomialFeatures':
+        result, msg = run_polynomial_features_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'PCA':
+        result, msg = run_pca_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'VarianceThreshold':
+        result, msg = run_variance_threshold_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'SelectKBest':
+        result, msg = run_select_kbest_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'RFE':
+        result, msg = run_rfe_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'LogTransform':
+        result, msg = run_log_transform_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'Discretizer':
+        result, msg = run_discretizer_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
+        return result, artifacts, msg, node_type
+
+    if node_type == 'CustomMathFeatures':
+        result, msg = run_custom_math_features_node(input_data, params)
+        artifacts['features'] = result.get('columns', [])
         return result, artifacts, msg, node_type
 
     # 5. EDA & Statistics nodes
@@ -550,6 +738,17 @@ def execute_single_node(node, input_data, graph_id=None, nodes=None, edges=None)
         resp.raise_for_status()
         raw_json = resp.json()
         raw_result = raw_json.get('result', {})
+    except (httpx.ConnectError, httpx.TimeoutException, httpx.NetworkError):
+        # Graceful in-process execution fallback
+        try:
+            import sys
+            root_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+            if root_dir not in sys.path:
+                sys.path.insert(0, root_dir)
+            from FAST_API_SERVICE.engine import execute_algorithm
+            raw_result = execute_algorithm(node_type, params, input_data)
+        except Exception as local_err:
+            raise ValueError(f"FastAPI service unreachable at {FASTAPI_URL} and local fallback failed: {str(local_err)[:200]}")
     except httpx.HTTPStatusError as e:
         status_code = e.response.status_code if e.response is not None else 500
         if status_code == 502:

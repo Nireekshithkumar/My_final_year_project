@@ -36,12 +36,50 @@ export default function DatasetUpload({ onUploaded, isDark = true }) {
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const droppedFile = e.dataTransfer.files[0];
-      if (droppedFile.name.endsWith('.csv')) {
+      const name = droppedFile.name.toLowerCase();
+      if (name.endsWith('.csv') || name.endsWith('.xlsx') || name.endsWith('.xls')) {
         setFile(droppedFile);
         setError('');
       } else {
-        setError('Please drop a valid .csv file.');
+        setError('Please drop a valid .csv, .xlsx, or .xls file.');
       }
+    }
+  };
+
+  const handleBrowseClick = async () => {
+    if (window.electronAPI && typeof window.electronAPI.openFileDialog === 'function') {
+      try {
+        const { canceled, filePaths } = await window.electronAPI.openFileDialog({
+          title: 'Select Dataset (CSV or Excel)',
+        });
+        if (!canceled && filePaths && filePaths.length > 0) {
+          const filePath = filePaths[0];
+          const fileName = filePath.split(/[\\/]/).pop();
+          const { success, content, error: readErr } = await window.electronAPI.readFile({ filePath });
+          if (success && content) {
+            const byteCharacters = atob(content);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            const blob = new Blob([byteArray], {
+              type: fileName.endsWith('.xlsx') || fileName.endsWith('.xls')
+                ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+                : 'text/csv',
+            });
+            const nativeFile = new File([blob], fileName);
+            setFile(nativeFile);
+            setError('');
+          } else {
+            setError(readErr || 'Failed to read the selected file.');
+          }
+        }
+      } catch (err) {
+        setError('Error opening native file dialog: ' + err.message);
+      }
+    } else {
+      fileInputRef.current?.click();
     }
   };
 
@@ -147,7 +185,7 @@ export default function DatasetUpload({ onUploaded, isDark = true }) {
             onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
             onDragLeave={() => setIsDragging(false)}
             onDrop={handleFileDrop}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={handleBrowseClick}
             style={{
               display: 'flex',
               flexDirection: 'column',
@@ -169,7 +207,7 @@ export default function DatasetUpload({ onUploaded, isDark = true }) {
             <input
               ref={fileInputRef}
               type="file"
-              accept=".csv"
+              accept=".csv, .xlsx, .xls"
               onChange={handleFileChange}
               style={{ display: 'none' }}
             />

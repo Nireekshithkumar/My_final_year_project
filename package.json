@@ -1,0 +1,14 @@
+{
+  "name": "neuralcanvas-monorepo",
+  "version": "1.0.0",
+  "private": true,
+  "description": "NeuralCanvas — AI & Machine Learning Pipeline Canvas (Web & Desktop)",
+  "scripts": {
+    "web:dev": "npm --prefix neuralcanvas-frontend run dev",
+    "web:build": "npm --prefix neuralcanvas-frontend run build",
+    "desktop:install": "npm --prefix desktop install",
+    "desktop:dev": "npm --prefix desktop run desktop:dev",
+    "desktop:build": "npm --prefix desktop run desktop:build",
+    "desktop:dist": "npm --prefix desktop run desktop:dist"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "name": "neuralcanvas-desktop",
+  "version": "1.0.0",
+  "description": "NeuralCanvas Desktop — ML pipeline builder for Windows",
+  "main": "src/main.js",
+  "private": true,
+  "scripts": {
+    "desktop:dev": "electron .",
+    "desktop:build": "electron-builder --win --config electron-builder.json",
+    "desktop:dist": "electron-builder --win --config electron-builder.json"
+  },
+  "keywords": ["neuralcanvas", "ml", "pipeline", "electron"],
+  "author": "NeuralCanvas Team",
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "electron-store": "^8.2.0"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.neuralcanvas.desktop",
+    "productName": "NeuralCanvas",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "!node_modules/**/*"
+    ],
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] },
+        { "target": "portable", "arch": ["x64"] }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "NeuralCanvas"
+    }
+  }
+}

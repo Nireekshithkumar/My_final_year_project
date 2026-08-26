@@ -54,24 +54,62 @@ export default function Navbar() {
 
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         {user && (
-          <button
-            onClick={() => navigate('/ai-copilot')}
-            style={{
-              background: 'linear-gradient(135deg, rgba(255, 0, 113, 0.2), rgba(139, 92, 246, 0.2))',
-              border: '1px solid rgba(255, 0, 113, 0.4)',
-              color: '#ff85be',
-              padding: '5px 12px',
-              borderRadius: 8,
-              fontSize: 12,
-              fontWeight: 700,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: 6,
-            }}
-          >
-            🤖 AI Copilot
-          </button>
+          <>
+            <button
+              onClick={() => navigate('/dashboard')}
+              style={{
+                background: 'rgba(255, 255, 255, 0.05)',
+                border: '1px solid rgba(255, 255, 255, 0.1)',
+                color: '#f1f5f9',
+                padding: '5px 12px',
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 600,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              📊 Pipelines
+            </button>
+            <button
+              onClick={() => navigate('/experiments')}
+              style={{
+                background: 'rgba(236, 72, 153, 0.15)',
+                border: '1px solid rgba(236, 72, 153, 0.35)',
+                color: '#ff85be',
+                padding: '5px 12px',
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              🧪 Experiments
+            </button>
+            <button
+              onClick={() => navigate('/ai-copilot')}
+              style={{
+                background: 'linear-gradient(135deg, rgba(255, 0, 113, 0.2), rgba(139, 92, 246, 0.2))',
+                border: '1px solid rgba(255, 0, 113, 0.4)',
+                color: '#ff85be',
+                padding: '5px 12px',
+                borderRadius: 8,
+                fontSize: 12,
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 6,
+              }}
+            >
+              🤖 AI Copilot
+            </button>
+          </>
         )}
         {user && (
           <span style={{

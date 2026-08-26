@@ -52,23 +52,53 @@ class DatasetPreviewView(APIView):
 
         # Build DataFrame from cached output structure
         df = None
+        partition_label = None  # track which partition we are showing
+
         if "dataframe" in output_data:
             df = normalize_dataframe_columns(pd.DataFrame(output_data["dataframe"]))
 
         elif "X_train" in output_data and "X_test" in output_data:
-            # Split-format output — show train + test combined, labelled
-            cols = output_data.get("columns", [f"feat_{i}" for i in range(len(output_data["X_train"][0]) if output_data["X_train"] else 0)])
-            train_df = pd.DataFrame(output_data["X_train"], columns=cols)
-            train_df["_split"] = "train"
-            if output_data.get("y_train"):
-                train_df["target"] = output_data["y_train"]
+            # ── Split-format output ──────────────────────────────────────────────
+            # Honour the ?partition= query parameter:
+            #   X_train | train      → only training features
+            #   X_test  | test       → only test features
+            #   y_train             → training labels
+            #   y_test              → test labels
+            #   all                 → concat train+test (legacy behaviour)
+            #   (default)           → X_train
+            partition = request.GET.get('partition', 'X_train').strip().lower()
+            cols = output_data.get("columns", [
+                f"feat_{i}" for i in range(len(output_data["X_train"][0]) if output_data["X_train"] else 0)
+            ])
 
-            test_df = pd.DataFrame(output_data["X_test"], columns=cols)
-            test_df["_split"] = "test"
-            if output_data.get("y_test"):
-                test_df["target"] = output_data["y_test"]
-
-            df = pd.concat([train_df, test_df], ignore_index=True)
+            if partition in ('y_train',):
+                df = pd.DataFrame({"target": output_data.get("y_train", [])})
+                partition_label = "y_train"
+            elif partition in ('y_test',):
+                df = pd.DataFrame({"target": output_data.get("y_test", [])})
+                partition_label = "y_test"
+            elif partition in ('x_test', 'test'):
+                df = pd.DataFrame(output_data["X_test"], columns=cols)
+                if output_data.get("y_test"):
+                    df["target"] = output_data["y_test"]
+                partition_label = "X_test"
+            elif partition == 'all':
+                train_df = pd.DataFrame(output_data["X_train"], columns=cols)
+                train_df["_split"] = "train"
+                if output_data.get("y_train"):
+                    train_df["target"] = output_data["y_train"]
+                test_df = pd.DataFrame(output_data["X_test"], columns=cols)
+                test_df["_split"] = "test"
+                if output_data.get("y_test"):
+                    test_df["target"] = output_data["y_test"]
+                df = pd.concat([train_df, test_df], ignore_index=True)
+                partition_label = "all"
+            else:
+                # Default → X_train
+                df = pd.DataFrame(output_data["X_train"], columns=cols)
+                if output_data.get("y_train"):
+                    df["target"] = output_data["y_train"]
+                partition_label = "X_train"
 
         elif "X" in output_data:
             cols = output_data.get("columns", [f"feat_{i}" for i in range(len(output_data["X"][0]) if output_data["X"] else 0)])
@@ -200,6 +230,10 @@ class DatasetPreviewView(APIView):
             "column_stats": column_stats,
             "rows": rows,
         }
+
+        # Include partition info for split outputs so the frontend can show the right label
+        if partition_label:
+            response_data["partition"] = partition_label
 
         # Forward any rich model / EDA / evaluation artifacts
         for key in [

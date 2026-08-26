@@ -23,13 +23,17 @@ staticfiles/
 media/
 *.cache
 
-# Node / Frontend
+# Node / Frontend / Desktop
 node_modules/
 dist/
 build/
+dist-electron/
+*.exe
+*.blockmap
 frontend/.env
 frontend/.env.local
 frontend/.env.production.local
+desktop/.env
 .oxlintrc.json
 
 # IDE / OS

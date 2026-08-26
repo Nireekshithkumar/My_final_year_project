@@ -1,0 +1,44 @@
+NIREEKSHITH KUMAR
++91 8971535139 | nireekshith9@gmail.com | GitHub | Portfolio | Mangalore, India
+Summary
+Final-year Electronics and Communication Engineering student skilled in Python, Django, and FastAPI, with a
+strong interest in Machine Learning. Quick learner, adaptable, and eager to contribute in a fast-paced software
+engineering role.
+Education
+Bachelor of Engineering, Electronics and Communication Engineering
+Yenepoya Institute of Technology
+Technical Skills
+Sep 2023– Sep 2027
+CGPA: 8.21 / 10.0
+Programming Languages: Python, SQL
+Frameworks & Libraries: Django, Django REST Framework, FastAPI, Scikit-Learn, TensorFlow, Pandas,
+NumPy
+Databases: PostgreSQL
+Tools & Platforms: Git, GitHub, Docker, Jupyter Notebook
+Concepts: Object-Oriented Programming (OOP), REST API Design, Machine Learning Fundamentals
+Soft Skills: Teamwork, Adaptability, Communication, Time Management
+Projects
+Neural Canvas– No-Code ML Model Builder
+Backend Developer
+Jan 2024– Present
+Developed a no-code ML platform enabling users to build machine learning workflows through a drag-and-drop
+interface.
+Built REST APIs using FastAPI and Django REST Framework for model training and inference, integrating
+TensorFlow/Keras and Scikit-Learn.
+Containerized Django, FastAPI, and PostgreSQL services using Docker Compose for consistent, seamless de
+ployment across environments.
+Technologies: Django, FastAPI, PostgreSQL, TensorFlow, Docker, Caching (File/Memory Cache)
+Personal Portfolio Website
+Developer
+Jan 2024– Present
+Designed and developed a fully responsive personal website to showcase projects, skills, and professional back
+ground.
+Integrated a functional email-based contact form for direct visitor communication without third-party services.
+Deployed on Render.com with continuous public availability.
+Technologies: HTML, CSS
+Awards & Achievements
+HACKABHiGNA– 24-Hour Hackathon
+Adichunchanagiri Institute of Technology (AIT)
+Oct 2025
+Collaborated with a multidisciplinary team to build solutions under time constraints, strengthening problem
+solving, teamwork, and project management skills.

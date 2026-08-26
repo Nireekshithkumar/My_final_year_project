@@ -686,12 +686,34 @@ def execute_ml(algorithm_type: str, params: dict, input_data: dict) -> dict:
                 "explained_variance_ratio": model.explained_variance_ratio_.tolist(),
             }
 
+
     # Supervised Model Training
     if is_split:
-        X_train = np.array(input_data['X_train'], dtype=float)
-        X_test = np.array(input_data['X_test'], dtype=float)
+        # ── Guard: reject text/string columns before they crash numpy ────────
+        X_train_raw = input_data['X_train']
+        X_test_raw = input_data['X_test']
+        columns = input_data.get('columns', [])
+        if X_train_raw and columns:
+            _sample_df = pd.DataFrame(X_train_raw[:5], columns=columns) if len(columns) == len(X_train_raw[0]) else None
+            if _sample_df is not None:
+                bad_cols = [c for c in _sample_df.columns if _sample_df[c].dtype == object or pd.api.types.is_string_dtype(_sample_df[c])]
+                if bad_cols:
+                    from fastapi import HTTPException
+                    raise HTTPException(
+                        status_code=422,
+                        detail={
+                            "error": "UNENCODED_FEATURES",
+                            "message": f"Feature columns still contain text values: {', '.join(bad_cols)}. Encode them before training.",
+                            "columns": bad_cols,
+                            "suggestion": "Connect a Categorical Encoder node before the model node.",
+                        }
+                    )
+
+        X_train = np.array(X_train_raw, dtype=float)
+        X_test = np.array(X_test_raw, dtype=float)
         y_train = np.array(input_data['y_train'])
         y_test = np.array(input_data['y_test'])
+
     else:
         X_float = np.array(input_data['X'], dtype=float)
         y = np.array(input_data['y'])
@@ -980,6 +1002,7 @@ def execute_model_comparison(params: dict, input_data: dict) -> dict:
     return {
         "task_type": "regression" if is_regression else "classification",
         "comparison_table": results,
+        "leaderboard": results,
         "best_algorithm": results[0]["algorithm"] if results else None
     }
 

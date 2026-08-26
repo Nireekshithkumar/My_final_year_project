@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>NeuralCanvas — Offline</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #090d16;
+      color: #f8fafc;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      text-align: center;
+      padding: 32px;
+    }
+
+    .logo {
+      font-size: 52px;
+      margin-bottom: 20px;
+      animation: pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.08); opacity: 0.8; }
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 800;
+      background: linear-gradient(135deg, #ff0071, #8b5cf6);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      margin-bottom: 12px;
+      letter-spacing: -0.5px;
+    }
+
+    .subtitle {
+      font-size: 15px;
+      color: #94a3b8;
+      margin-bottom: 10px;
+      line-height: 1.6;
+      max-width: 420px;
+    }
+
+    .status-box {
+      background: rgba(255, 0, 113, 0.08);
+      border: 1px solid rgba(255, 0, 113, 0.25);
+      border-radius: 12px;
+      padding: 14px 24px;
+      margin: 18px 0 28px;
+      font-size: 13px;
+      color: #ff85be;
+      max-width: 420px;
+    }
+
+    .status-box strong { color: #ffc2dd; }
+
+    button {
+      background: linear-gradient(135deg, #ff0071, #8b5cf6);
+      color: #fff;
+      border: none;
+      border-radius: 10px;
+      padding: 12px 32px;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      letter-spacing: 0.2px;
+      transition: all 0.2s;
+      box-shadow: 0 4px 24px rgba(255, 0, 113, 0.35);
+    }
+
+    button:hover {
+      filter: brightness(1.12);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 32px rgba(255, 0, 113, 0.5);
+    }
+
+    button:active { transform: translateY(0); }
+
+    .hint {
+      margin-top: 20px;
+      font-size: 12px;
+      color: #475569;
+    }
+
+    .dots {
+      display: inline-flex;
+      gap: 4px;
+      margin-left: 6px;
+    }
+
+    .dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: #ff0071;
+      animation: blink 1.2s ease-in-out infinite;
+    }
+
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes blink {
+      0%, 100% { opacity: 0.2; }
+      50% { opacity: 1; }
+    }
+
+    #checking { display: none; font-size: 13px; color: #94a3b8; margin-top: 12px; }
+  </style>
+</head>
+<body>
+  <div class="logo">⚡</div>
+  <h1>NeuralCanvas</h1>
+  <p class="subtitle">
+    NeuralCanvas requires an internet connection to connect to the backend
+    and load the application.
+  </p>
+
+  <div class="status-box">
+    <strong>⚠ Could not reach the application.</strong><br />
+    This may be because:<br />
+    • The Vite dev server is not running (development mode)<br />
+    • Your internet connection is unavailable<br />
+    • The backend is waking up (Render cold start can take ~30 s)
+  </div>
+
+  <button onclick="retryConnection()">↻ Retry Connection</button>
+
+  <p id="checking">Checking<span class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></span></p>
+
+  <p class="hint">
+    Backend: <code>https://neuralcanvas-backend.onrender.com</code><br />
+    Frontend: <code>https://neuralcanvasteam.vercel.app</code>
+  </p>
+
+  <script>
+    function retryConnection() {
+      document.getElementById('checking').style.display = 'block'
+      setTimeout(() => {
+        window.location.href = 'https://neuralcanvasteam.vercel.app'
+      }, 800)
+    }
+  </script>
+</body>
+</html>

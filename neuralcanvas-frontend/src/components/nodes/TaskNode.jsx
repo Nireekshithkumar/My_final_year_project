@@ -46,20 +46,35 @@ export default function TaskNode({ id, data = {}, selected }) {
   const sb = STATUS_MAP[status] || STATUS_MAP.ready;
 
 
-  return (
-    <div style={{
-      background: "rgba(17, 24, 39, 0.95)",
-      border: selected ? "1.5px solid #ff0071" : "1px solid rgba(255, 255, 255, 0.1)",
-      borderRadius: 14,
-      boxShadow: selected
-        ? "0 0 0 2px rgba(255,0,113,0.4), 0 12px 36px rgba(255,0,113,0.25)"
-        : "0 10px 30px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)",
-      padding: "12px 14px",
-      minWidth: 200,
-      fontFamily: "'Inter', sans-serif",
-      backdropFilter: "blur(16px)",
-      transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
-    }}>
+    const hasValErrors = Array.isArray(data?.validationErrors) && data.validationErrors.length > 0;
+    const hasValWarnings = Array.isArray(data?.validationWarnings) && data.validationWarnings.length > 0;
+
+    let nodeBorder = "1px solid rgba(255, 255, 255, 0.1)";
+    let nodeShadow = "0 10px 30px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.04)";
+
+    if (selected) {
+      nodeBorder = "1.5px solid #ff0071";
+      nodeShadow = "0 0 0 2px rgba(255,0,113,0.4), 0 12px 36px rgba(255,0,113,0.25)";
+    } else if (hasValErrors) {
+      nodeBorder = "1.5px solid #ef4444";
+      nodeShadow = "0 0 0 1px rgba(239, 68, 68, 0.4), 0 10px 30px rgba(239, 68, 68, 0.2)";
+    } else if (hasValWarnings) {
+      nodeBorder = "1.5px solid #f59e0b";
+      nodeShadow = "0 0 0 1px rgba(245, 158, 11, 0.3), 0 10px 30px rgba(245, 158, 11, 0.15)";
+    }
+
+    return (
+      <div style={{
+        background: "rgba(17, 24, 39, 0.95)",
+        border: nodeBorder,
+        borderRadius: 14,
+        boxShadow: nodeShadow,
+        padding: "12px 14px",
+        minWidth: 200,
+        fontFamily: "'Inter', sans-serif",
+        backdropFilter: "blur(16px)",
+        transition: "all 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+      }}>
       <Handle
         type="target"
         position={Position.Left}
@@ -158,6 +173,58 @@ export default function TaskNode({ id, data = {}, selected }) {
           {sb.label}
         </span>
       </div>
+
+      {/* Pre-flight Validation Error Banner */}
+      {Array.isArray(data?.validationErrors) && data.validationErrors.length > 0 && (
+        <div
+          style={{
+            background: 'rgba(239, 68, 68, 0.18)',
+            border: '1px solid rgba(239, 68, 68, 0.5)',
+            color: '#fca5a5',
+            fontSize: 10.5,
+            lineHeight: 1.35,
+            padding: '7px 9px',
+            borderRadius: 8,
+            marginBottom: 8,
+            wordBreak: 'break-word',
+            boxShadow: '0 0 10px rgba(239, 68, 68, 0.2)',
+          }}
+        >
+          <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+            <span>❌</span>
+            <span>Validation Issue</span>
+          </div>
+          {data.validationErrors.map((err, idx) => (
+            <div key={idx} style={{ marginTop: idx > 0 ? 3 : 0 }}>• {err}</div>
+          ))}
+        </div>
+      )}
+
+      {/* Pre-flight Validation Warning Banner */}
+      {(!data?.validationErrors || data.validationErrors.length === 0) &&
+        Array.isArray(data?.validationWarnings) && data.validationWarnings.length > 0 && (
+        <div
+          style={{
+            background: 'rgba(245, 158, 11, 0.15)',
+            border: '1px solid rgba(245, 158, 11, 0.4)',
+            color: '#fde68a',
+            fontSize: 10.5,
+            lineHeight: 1.35,
+            padding: '7px 9px',
+            borderRadius: 8,
+            marginBottom: 8,
+            wordBreak: 'break-word',
+          }}
+        >
+          <div style={{ fontWeight: 700, display: 'flex', alignItems: 'center', gap: 4, marginBottom: 2 }}>
+            <span>⚠️</span>
+            <span>Advisory Warning</span>
+          </div>
+          {data.validationWarnings.map((warn, idx) => (
+            <div key={idx} style={{ marginTop: idx > 0 ? 3 : 0 }}>• {warn}</div>
+          ))}
+        </div>
+      )}
 
       {/* Clear Error Message Banner */}
       {status === 'failed' && (data?.lastError || data?.error) && (

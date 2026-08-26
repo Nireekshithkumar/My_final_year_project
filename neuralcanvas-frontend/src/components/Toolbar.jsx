@@ -1,6 +1,8 @@
 export default function Toolbar({
   pipelineName,
   status,
+  validationState,
+  onValidate,
   onSave,
   onRun,
   onPause,
@@ -16,6 +18,7 @@ export default function Toolbar({
   onZoomIn,
   onZoomOut,
   onFitView,
+  onOpenTemplates,
   onOpenProfile,
   onOpenAutoML,
   onOpenCompare,
@@ -25,6 +28,8 @@ export default function Toolbar({
   onOpenReport,
   onExportProject,
   onImportProject,
+  onDownloadONNX,
+  onDownloadScript,
 }) {
   const statusConfig = {
     success: { cls: "badge-success", label: "● Ready / Done" },
@@ -76,6 +81,45 @@ export default function Toolbar({
 
       {/* Primary Execution Controls */}
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+        {onValidate && (
+          <button
+            onClick={onValidate}
+            disabled={isRunning}
+            style={{
+              background: validationState?.valid === false
+                ? "rgba(239, 68, 68, 0.2)"
+                : validationState?.warnings?.length > 0
+                ? "rgba(245, 158, 11, 0.2)"
+                : "rgba(16, 185, 129, 0.2)",
+              color: validationState?.valid === false
+                ? "#fca5a5"
+                : validationState?.warnings?.length > 0
+                ? "#fde68a"
+                : "#6ee7b7",
+              border: `1px solid ${
+                validationState?.valid === false
+                  ? "rgba(239, 68, 68, 0.4)"
+                  : validationState?.warnings?.length > 0
+                  ? "rgba(245, 158, 11, 0.4)"
+                  : "rgba(16, 185, 129, 0.4)"
+              }`,
+              borderRadius: 8,
+              padding: "6px 11px",
+              fontSize: 12,
+              fontWeight: 700,
+              cursor: isRunning ? "not-allowed" : "pointer",
+              display: "flex",
+              alignItems: "center",
+              gap: 5,
+              transition: "all 0.15s",
+            }}
+            title={validationState?.summary || "Validate pipeline graph for errors"}
+          >
+            <span>{validationState?.valid === false ? "❌" : validationState?.warnings?.length > 0 ? "⚠️" : "🛡️"}</span>
+            <span>Validate</span>
+          </button>
+        )}
+
         <button
           onClick={onSave}
           disabled={isRunning}
@@ -86,7 +130,14 @@ export default function Toolbar({
         </button>
 
         {!isRunning && !isPaused && (
-          <button onClick={onRun} style={btnPrimaryStyle} title="Execute complete DAG workflow">
+          <button
+            onClick={onRun}
+            style={{
+              ...btnPrimaryStyle,
+              opacity: validationState?.valid === false ? 0.7 : 1,
+            }}
+            title={validationState?.valid === false ? "Fix critical validation errors before running" : "Execute complete DAG workflow"}
+          >
             ▶ Run
           </button>
         )}
@@ -134,6 +185,11 @@ export default function Toolbar({
 
       {/* Advanced Studio Tools */}
       <div style={{ display: "flex", gap: 5, alignItems: "center", flexShrink: 0 }}>
+        {onOpenTemplates && (
+          <button onClick={onOpenTemplates} style={btnStudioStyle("#8b5cf6")} title="Pipeline Starter Templates Library">
+            📚 Templates
+          </button>
+        )}
         {onOpenProfile && (
           <button onClick={onOpenProfile} style={btnStudioStyle("#06b6d4")} title="Dataset Quality & Profiling">
             📊 Profile
@@ -192,6 +248,42 @@ export default function Toolbar({
           </label>
         )}
       </div>
+
+      <div style={{ width: 1, height: 20, background: "rgba(255, 255, 255, 0.1)", flexShrink: 0 }} />
+
+      {/* Model Export: ONNX + Infer Script */}
+      {(onDownloadONNX || onDownloadScript) && (
+        <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+          {onDownloadONNX && (
+            <button
+              onClick={onDownloadONNX}
+              style={{
+                ...iconBtnStyle,
+                background: "rgba(139, 92, 246, 0.15)",
+                color: "#c4b5fd",
+                border: "1px solid rgba(139, 92, 246, 0.3)",
+              }}
+              title="Export model as ONNX (cross-platform ML interchange format)"
+            >
+              ⬡ ONNX
+            </button>
+          )}
+          {onDownloadScript && (
+            <button
+              onClick={onDownloadScript}
+              style={{
+                ...iconBtnStyle,
+                background: "rgba(20, 184, 166, 0.15)",
+                color: "#5eead4",
+                border: "1px solid rgba(20, 184, 166, 0.3)",
+              }}
+              title="Download standalone Python inference script bundle (infer.py + model)"
+            >
+              🐍 infer.py
+            </button>
+          )}
+        </div>
+      )}
 
       <div style={{ width: 1, height: 20, background: "rgba(255, 255, 255, 0.1)", flexShrink: 0 }} />
 

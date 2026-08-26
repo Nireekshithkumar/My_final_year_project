@@ -61,9 +61,20 @@ class TrainedModel(models.Model):
 
 class PipelineExecutionRun(models.Model):
     pipeline = models.ForeignKey(Pipeline, on_delete=models.CASCADE, related_name='execution_runs')
+    owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='execution_runs', null=True, blank=True)
     run_number = models.PositiveIntegerField(default=1)
-    status = models.CharField(max_length=20, default='success')
-    start_time = models.DateTimeField(auto_now_add=True)
+    pipeline_version = models.PositiveIntegerField(default=1)
+    status = models.CharField(max_length=20, default='success', db_index=True)
+    dataset_name = models.CharField(max_length=255, blank=True)
+    dataset_fingerprint = models.CharField(max_length=64, blank=True, db_index=True)
+    algorithm = models.CharField(max_length=100, blank=True, db_index=True)
+    hyperparameters = models.JSONField(default=dict)
+    preprocessing_steps = models.JSONField(default=list)
+    metrics = models.JSONField(default=dict)
+    random_seed = models.IntegerField(null=True, blank=True)
+    is_archived = models.BooleanField(default=False, db_index=True)
+    model_artifact_path = models.CharField(max_length=500, blank=True)
+    start_time = models.DateTimeField(auto_now_add=True, db_index=True)
     end_time = models.DateTimeField(null=True, blank=True)
     elapsed_seconds = models.FloatField(null=True, blank=True)
     nodes_snapshot = models.JSONField(default=list)
@@ -73,6 +84,10 @@ class PipelineExecutionRun(models.Model):
 
     class Meta:
         ordering = ['-start_time']
+        indexes = [
+            models.Index(fields=['pipeline', '-start_time']),
+            models.Index(fields=['owner', '-start_time']),
+        ]
 
     def __str__(self):
         return f"Run #{self.run_number} for {self.pipeline.name} ({self.status})"

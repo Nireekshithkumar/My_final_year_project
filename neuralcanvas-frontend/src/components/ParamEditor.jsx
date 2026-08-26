@@ -85,10 +85,9 @@ export default function ParamEditor({ nodeType, params = {}, onChange, dark, col
               onChange={(e) => handleChange(field.name, e.target.value)}
               style={inputStyle(c)}
             >
-              {field.name === "target_column" ? (
+              {(!field.options || field.options.length === 0 || ["target_column", "column", "old_name"].includes(field.name)) ? (
                 <>
                   <option value="">Select column</option>
-
                   {cleanColumns.map((col) => (
                     <option key={col} value={col}>
                       {col}

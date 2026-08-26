@@ -1,19 +1,99 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import MarkdownMessage from "./MarkdownMessage";
+import api from "../api/axios";
 
-export default function AICopilotPanel({ isOpen, onClose, pipelineNodes = [], pipelineError = "" }) {
+export default function AICopilotPanel({
+  isOpen,
+  onClose,
+  pipelineId,
+  datasetId,
+  pipelineNodes = [],
+  pipelineError = "",
+  onApplyPipeline,
+}) {
   const [messages, setMessages] = useState([
     {
       sender: "assistant",
-      text: "👋 Hi! I'm your NeuralCanvas AI Pipeline Copilot. I inspect your active canvas blocks, dataset quality, and errors to recommend ML architectures and debug failed pipelines. Ask me anything!",
+      text: "👋 Hi! I'm your **NeuralCanvas AI Pipeline Copilot**.\n\nI can automatically design full ML pipelines, debug DAG execution errors, recommend optimal models, and explain complex hyperparameters. Ask me anything or choose a quick action below!",
     },
   ]);
   const [input, setInput] = useState("");
   const [thinking, setThinking] = useState(false);
+  const [provider, setProvider] = useState("RuleEngine");
+  const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    api.get("/ai/status/")
+      .then(({ data }) => {
+        if (data?.active_provider) setProvider(data.active_provider);
+      })
+      .catch(() => {});
+  }, [isOpen]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages, thinking]);
 
   if (!isOpen) return null;
 
-  const handleSend = (userText) => {
+  const normalizeAiNodesToCanvas = (rawNodes) => {
+    if (!Array.isArray(rawNodes)) return [];
+    return rawNodes.map((n) => {
+      const nodeType = n.node_type || n.data?.nodeType || n.type || "start";
+      const title = n.label || n.data?.title || nodeType;
+      return {
+        id: String(n.id || `node_${Math.floor(Math.random() * 10000)}`),
+        type: "taskNode",
+        position: n.position || { x: 100, y: 100 },
+        data: {
+          title: title,
+          nodeType: nodeType,
+          icon: n.icon || n.data?.icon || "⚡",
+          iconColor: n.iconColor || n.data?.iconColor || "#ff0071",
+          outputs: n.outputs || n.data?.outputs || [{ id: "next", label: "Connection Task", color: "#22c55e" }],
+          params: n.params || n.data?.params || {},
+          status: "idle",
+        },
+      };
+    });
+  };
+
+  const generateAutoEdges = (canvasNodes) => {
+    const edges = [];
+    for (let i = 0; i < canvasNodes.length - 1; i++) {
+      const source = canvasNodes[i];
+      const target = canvasNodes[i + 1];
+      const sourceHandle = source.data?.outputs?.[0]?.id || "next";
+      edges.push({
+        id: `e_${source.id}_${target.id}`,
+        source: source.id,
+        target: target.id,
+        sourceHandle: sourceHandle,
+        targetHandle: "input",
+        type: "smoothstep",
+        animated: true,
+        style: { stroke: "#ff0071", strokeWidth: 2 },
+      });
+    }
+    return edges;
+  };
+
+  const handleApplyGeneratedDAG = (rawNodes, rawEdges) => {
+    if (!onApplyPipeline) return;
+    const canvasNodes = normalizeAiNodesToCanvas(rawNodes);
+    const canvasEdges = rawEdges && rawEdges.length > 0 ? rawEdges : generateAutoEdges(canvasNodes);
+    onApplyPipeline(canvasNodes, canvasEdges);
+    setMessages((prev) => [
+      ...prev,
+      {
+        sender: "assistant",
+        text: `✅ **Applied AI Pipeline to Canvas!** Added **${canvasNodes.length} connected blocks** with auto-configured hyperparameters. You can now click **Save** or **Run** in the toolbar.`,
+      },
+    ]);
+  };
+
+  const handleSend = async (userText) => {
     const text = userText || input;
     if (!text.trim()) return;
 
@@ -22,38 +102,93 @@ export default function AICopilotPanel({ isOpen, onClose, pipelineNodes = [], pi
     setInput("");
     setThinking(true);
 
-    setTimeout(() => {
-      // Analyze current pipeline context
+    try {
+      // Build conversation history for multi-turn chat
+      const history = messages
+        .filter((m) => m.text)
+        .map((m) => ({
+          role: m.sender === "user" ? "user" : "assistant",
+          content: m.text,
+        }));
+
+      const { data } = await api.post("/ai/chat/", {
+        message: text,
+        dataset_id: datasetId,
+        pipeline_id: pipelineId,
+        history: history.slice(-6),
+      });
+
+      const replyText = data.text || data.response || "I have analyzed your request.";
+      const actionType = data.action_type;
+      const payload = data.payload;
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "assistant",
+          text: replyText,
+          actionType: actionType,
+          payload: payload,
+        },
+      ]);
+    } catch (err) {
+      // Local intelligent fallback if backend AI error occurs
       const nodeTypes = pipelineNodes.map((n) => n.data?.nodeType || n.type);
       const hasDataset = nodeTypes.includes("loadDataset");
       const hasSplit = nodeTypes.includes("splitDataset");
-      const hasModel = nodeTypes.some((t) =>
-        [
-          "RandomForestClassifier", "LogisticRegression", "GradientBoostingClassifier",
-          "LinearRegression", "VotingClassifier", "StackingClassifier", "AutoML"
-        ].includes(t)
-      );
 
-      let reply = "";
+      let fallbackReply = "";
       const lower = text.toLowerCase();
 
-      if (lower.includes("why did my pipeline fail") || lower.includes("error") || lower.includes("debug")) {
-        if (pipelineError) {
-          reply = `🔍 **Error Diagnosis:**\n\nYour pipeline reported: \`${pipelineError}\`\n\n**Recommendation:** Check if all required inputs are connected. If it's a dataset error, ensure you have selected a CSV file in the Load Dataset block. If it's a target error, choose a target column in the Split Dataset block.`;
-        } else {
-          reply = "✅ No active errors detected in the current pipeline state! If a block fails during execution, I will automatically analyze the traceback.";
-        }
-      } else if (lower.includes("recommend") || lower.includes("what model") || lower.includes("suggest")) {
-        reply = `💡 **ML Architecture Recommendation:**\n\nBased on standard tabular benchmarks:\n1. **Random Forest / Gradient Boosting** are robust defaults that handle non-linear relationships with minimal scaling.\n2. **AutoML Block:** You can use our 1-Click AutoML tool in the toolbar to benchmark 6+ models and automatically select the winner.\n3. **Ensembles:** Consider a **VotingClassifier** or **StackingClassifier** to combine Random Forest and Logistic Regression for higher accuracy.`;
-      } else if (lower.includes("preprocessing") || lower.includes("clean")) {
-        reply = `🧹 **Preprocessing Pipeline Advice:**\n\n1. **Missing Data:** Add an **Imputer** block (mean/median for numerical, most frequent for categorical).\n2. **Categorical Variables:** Add an **Encoder** block before splitting or scaling.\n3. **Feature Scaling:** Add **StandardScaler** or **RobustScaler** before linear models or neural networks.`;
+      if (lower.includes("debug") || lower.includes("error") || lower.includes("fail")) {
+        fallbackReply = pipelineError
+          ? `🔍 **Error Diagnosis:**\n\nYour pipeline reported: \`${pipelineError}\`\n\n**Recommendation:** Verify all upstream nodes are connected. Ensure you selected a CSV file in Load Dataset and specified a target column in Split Dataset.`
+          : "✅ No active errors detected in the current pipeline state!";
+      } else if (lower.includes("recommend") || lower.includes("model")) {
+        fallbackReply = `💡 **ML Architecture Recommendation:**\n\n1. **Random Forest / Gradient Boosting:** Robust defaults for tabular datasets.\n2. **AutoML:** Use the 1-Click AutoML tool in the toolbar to benchmark 6+ models automatically.\n3. **Ensembles:** Combine tree models using Voting or Stacking for maximum accuracy.`;
       } else {
-        reply = `🤖 **Pipeline Summary:** You currently have **${pipelineNodes.length} blocks** in your DAG (${hasDataset ? "✓ Dataset loaded" : "✗ Missing dataset"}, ${hasSplit ? "✓ Train/Test split" : "✗ Missing split"}, ${hasModel ? "✓ Model configured" : "✗ No model block"}).\n\nTry asking:\n• *"What preprocessing should I add?"*\n• *"Which algorithm is best for my data?"*\n• *"Why did my pipeline fail?"*`;
+        fallbackReply = `🤖 **Pipeline Status:** Currently configured with **${pipelineNodes.length} blocks** (${hasDataset ? "✓ Dataset loaded" : "✗ Missing dataset"}, ${hasSplit ? "✓ Train/Test split" : "✗ Missing split"}).`;
       }
 
-      setMessages((prev) => [...prev, { sender: "assistant", text: reply }]);
+      setMessages((prev) => [...prev, { sender: "assistant", text: fallbackReply }]);
+    } finally {
       setThinking(false);
-    }, 600);
+    }
+  };
+
+  const handleQuickAction = async (actionType) => {
+    setThinking(true);
+    try {
+      let endpoint = "/ai/chat/";
+      let payload = { dataset_id: datasetId, pipeline_id: pipelineId };
+
+      if (actionType === "generate") endpoint = "/ai/generate-pipeline/";
+      else if (actionType === "debug") endpoint = "/ai/debug-pipeline/";
+      else if (actionType === "recommend") endpoint = "/ai/recommend-model/";
+      else if (actionType === "analyze") endpoint = "/ai/analyze-dataset/";
+
+      const { data } = await api.post(endpoint, payload);
+
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "assistant",
+          text: data.text || "Action executed successfully.",
+          actionType: data.action_type || actionType,
+          payload: data.payload,
+        },
+      ]);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          sender: "assistant",
+          text: `⚠️ Could not complete action: ${err.response?.data?.error || err.message}`,
+        },
+      ]);
+    } finally {
+      setThinking(false);
+    }
   };
 
   return (
@@ -62,56 +197,102 @@ export default function AICopilotPanel({ isOpen, onClose, pipelineNodes = [], pi
       <div style={headerStyle}>
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 18 }}>✨</span>
-          <span style={{ fontSize: 13, fontWeight: 700, color: "#f8fafc" }}>AI Pipeline Copilot</span>
+          <div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#f8fafc" }}>AI Pipeline Copilot</div>
+            <div style={{ fontSize: 10, color: "#94a3b8" }}>
+              Engine: <span style={{ color: "#ff85be", fontWeight: 600 }}>{provider}</span>
+            </div>
+          </div>
         </div>
         <button onClick={onClose} style={closeBtnStyle}>✕</button>
       </div>
 
       {/* Messages */}
-      <div style={{ flex: 1, padding: 14, overflowY: "auto", display: "flex", flexDirection: "column", gap: 10 }}>
+      <div style={{ flex: 1, padding: 14, overflowY: "auto", display: "flex", flexDirection: "column", gap: 12 }}>
         {messages.map((m, idx) => (
           <div
             key={idx}
             style={{
               alignSelf: m.sender === "user" ? "flex-end" : "flex-start",
-              background: m.sender === "user" ? "rgba(255, 0, 113, 0.2)" : "rgba(15, 23, 42, 0.8)",
+              background: m.sender === "user" ? "rgba(255, 0, 113, 0.2)" : "rgba(15, 23, 42, 0.85)",
               border: m.sender === "user" ? "1px solid rgba(255, 0, 113, 0.4)" : "1px solid rgba(255, 255, 255, 0.08)",
               color: "#f8fafc",
-              padding: "8px 12px",
-              borderRadius: 10,
-              maxWidth: "85%",
+              padding: "10px 14px",
+              borderRadius: 12,
+              maxWidth: "90%",
               fontSize: 12,
-              lineHeight: 1.5,
+              lineHeight: 1.55,
             }}
           >
             <MarkdownMessage content={m.text} isUser={m.sender === "user"} />
+
+            {/* Render One-Click Action Card if pipeline generated */}
+            {(m.actionType === "generate_pipeline" || m.payload?.nodes) && (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  background: "rgba(99, 102, 241, 0.12)",
+                  border: "1px solid rgba(99, 102, 241, 0.3)",
+                  borderRadius: 8,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#a5b4fc" }}>
+                  ⚡ Proposed DAG: {m.payload?.nodes?.length || 5} Blocks Configured
+                </div>
+                <button
+                  onClick={() => handleApplyGeneratedDAG(m.payload?.nodes, m.payload?.edges)}
+                  style={{
+                    background: "linear-gradient(135deg, #ff0071 0%, #d90368 100%)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "6px 12px",
+                    fontSize: 11.5,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                    boxShadow: "0 2px 8px rgba(255,0,113,0.3)",
+                  }}
+                >
+                  ⚡ Apply Pipeline to Canvas
+                </button>
+              </div>
+            )}
           </div>
         ))}
+
         {thinking && (
-          <div style={{ alignSelf: "flex-start", color: "#94a3b8", fontSize: 11, fontStyle: "italic" }}>
-            Thinking…
+          <div style={{ alignSelf: "flex-start", color: "#ff85be", fontSize: 11, fontStyle: "italic", display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ animation: "pulse-pink 1.5s infinite" }}>⚡</span> Copilot is thinking & generating…
           </div>
         )}
+        <div ref={messagesEndRef} />
       </div>
 
-      {/* Suggested Quick Prompts */}
-      <div style={{ padding: "6px 12px", display: "flex", gap: 6, overflowX: "auto" }}>
-        <button onClick={() => handleSend("What preprocessing should I add?")} style={quickPromptStyle}>
-          🧹 Preprocessing?
+      {/* Suggested Quick Actions */}
+      <div style={{ padding: "6px 12px", display: "flex", gap: 6, overflowX: "auto", borderTop: "1px solid rgba(255, 255, 255, 0.04)" }}>
+        <button onClick={() => handleQuickAction("generate")} style={quickPromptStyle} title="Generate full DAG">
+          ✨ Auto-DAG
         </button>
-        <button onClick={() => handleSend("Which algorithm is best for my data?")} style={quickPromptStyle}>
-          🏆 Best Model?
+        <button onClick={() => handleQuickAction("recommend")} style={quickPromptStyle} title="Get model recommendation">
+          🏆 Recommend Model
         </button>
-        <button onClick={() => handleSend("Why did my pipeline fail?")} style={quickPromptStyle}>
+        <button onClick={() => handleQuickAction("debug")} style={quickPromptStyle} title="Diagnose pipeline errors">
           🔍 Debug Error
+        </button>
+        <button onClick={() => handleQuickAction("analyze")} style={quickPromptStyle} title="Inspect dataset quality">
+          📊 Dataset EDA
         </button>
       </div>
 
       {/* Input Box */}
-      <div style={{ padding: 10, borderTop: "1px solid rgba(255, 255, 255, 0.08)", display: "flex", gap: 8 }}>
+      <div style={{ padding: 10, borderTop: "1px solid rgba(255, 255, 255, 0.08)", display: "flex", gap: 8, background: "rgba(10, 15, 26, 0.95)" }}>
         <input
           type="text"
-          placeholder="Ask AI Copilot about your pipeline..."
+          placeholder="Ask AI Copilot (e.g. 'Build a classifier for churn')..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleSend()}
@@ -129,12 +310,12 @@ const panelContainerStyle = {
   position: "fixed",
   right: 20,
   bottom: 20,
-  width: 360,
-  height: 480,
+  width: 380,
+  height: 520,
   background: "#0b101d",
   border: "1px solid rgba(255, 255, 255, 0.12)",
   borderRadius: 14,
-  boxShadow: "0 10px 40px rgba(0,0,0,0.8)",
+  boxShadow: "0 14px 50px rgba(0,0,0,0.85)",
   display: "flex",
   flexDirection: "column",
   zIndex: 9999,
@@ -148,10 +329,10 @@ const headerStyle = {
   display: "flex",
   justifyContent: "space-between",
   alignItems: "center",
-  background: "rgba(10, 15, 26, 0.9)",
+  background: "rgba(10, 15, 26, 0.95)",
 };
 
 const closeBtnStyle = { background: "transparent", border: "none", color: "#64748b", fontSize: 16, cursor: "pointer" };
-const inputStyle = { flex: 1, background: "#080c14", border: "1px solid rgba(255,255,255,0.12)", color: "#f8fafc", borderRadius: 8, padding: "6px 10px", fontSize: 12, outline: "none" };
-const sendBtnStyle = { background: "linear-gradient(135deg, #ff0071, #8b5cf6)", color: "#fff", border: "none", borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontWeight: 700 };
-const quickPromptStyle = { background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.08)", color: "#94a3b8", borderRadius: 6, padding: "3px 8px", fontSize: 10.5, cursor: "pointer", whiteSpace: "nowrap" };
+const inputStyle = { flex: 1, background: "#080c14", border: "1px solid rgba(255,255,255,0.12)", color: "#f8fafc", borderRadius: 8, padding: "7px 11px", fontSize: 12, outline: "none" };
+const sendBtnStyle = { background: "linear-gradient(135deg, #ff0071, #8b5cf6)", color: "#fff", border: "none", borderRadius: 8, padding: "6px 14px", cursor: "pointer", fontWeight: 700 };
+const quickPromptStyle = { background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", color: "#94a3b8", borderRadius: 6, padding: "4px 9px", fontSize: 11, cursor: "pointer", whiteSpace: "nowrap", fontWeight: 600 };

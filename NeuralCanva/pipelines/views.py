@@ -59,12 +59,70 @@ class GraphUpdateView(APIView):
         return Response(serializer.data)
 
 
+from .validator import validate_pipeline_structure
+
+
+class PipelineValidateView(APIView):
+    """
+    Pre-flight validator endpoint for pipeline DAGs.
+    Validates structure, parameters, data leakage, and ML task compatibility.
+    """
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request, pk):
+        pipeline = get_object_or_404(Pipeline, pk=pk, owner=request.user)
+        graph, _ = Graph.objects.get_or_create(pipeline=pipeline)
+
+        # Allow testing unsaved client state passed in payload, or fallback to saved graph
+        nodes = request.data.get('nodes') if isinstance(request.data, dict) and 'nodes' in request.data else graph.nodes
+        edges = request.data.get('edges') if isinstance(request.data, dict) and 'edges' in request.data else graph.edges
+
+        # Fetch active dataset info if available
+        dataset_info = None
+        from datasets.models import Dataset
+        for n in (nodes or []):
+            if isinstance(n, dict):
+                ntype = n.get('data', {}).get('nodeType') or n.get('type')
+                if ntype == 'loadDataset':
+                    ds_id = n.get('data', {}).get('params', {}).get('dataset_id') or n.get('data', {}).get('params', {}).get('datasetId')
+                    if ds_id:
+                        try:
+                            ds = Dataset.objects.filter(id=ds_id, owner=request.user).first()
+                            if ds:
+                                dataset_info = {
+                                    'name': ds.name,
+                                    'columns': ds.columns,
+                                    'column_types': ds.column_types,
+                                    'row_count': ds.row_count,
+                                }
+                        except Exception:
+                            pass
+                    break
+
+        report = validate_pipeline_structure(nodes or [], edges or [], dataset_info=dataset_info)
+        return Response(report, status=200)
+
+
 class GraphExecuteView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request, pk):
         pipeline = get_object_or_404(Pipeline, pk=pk, owner=request.user)
         graph, _ = Graph.objects.get_or_create(pipeline=pipeline)
+
+        # Pre-execution validation check
+        skip_validation = request.data.get('skip_validation', False) if isinstance(request.data, dict) else False
+        if not skip_validation:
+            report = validate_pipeline_structure(graph.nodes or [], graph.edges or [])
+            if not report['valid']:
+                return Response(
+                    {
+                        'message': 'Pipeline validation failed with critical errors. Please resolve them before running.',
+                        'validation_report': report,
+                        'status': 'validation_error',
+                    },
+                    status=400,
+                )
 
         # Atomic check-and-set to prevent race conditions on simultaneous execute requests
         with transaction.atomic():
